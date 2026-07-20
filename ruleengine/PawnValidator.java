@@ -7,9 +7,7 @@ public class PawnValidator implements MoveValidator {
         // White's start row scales with board height (2nd from the far edge - row 6
         // on a standard 8-row board). Black's doesn't: mini boards start black at row
         // 0, the standard board at row 1.
-        boolean isStartRow = isWhite && sr == b.getRows() - 2;
-        if (!isWhite && sr == 0) isStartRow = true;
-        if (sr == 1 && !isWhite) isStartRow = true;
+        boolean isStartRow = isWhite ? sr == b.getRows() - 2 : (sr == 0 || sr == 1);
 
         if (sc == ec && er == sr + direction && b.getPieceAt(er, ec).isEmpty()) {
             return true;

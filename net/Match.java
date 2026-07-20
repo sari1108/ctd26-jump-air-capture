@@ -125,7 +125,7 @@ public class Match {
                     int row = Integer.parseInt(parts[1]);
                     int col = Integer.parseInt(parts[2]);
                     if (session.getSelectedPosition() == null && !ownsPieceAt(seat, row, col)) return;
-                    session.click(col * GameConfig.CELL_SIZE, row * GameConfig.CELL_SIZE);
+                    session.selectOrMove(row, col);
                     break;
                 }
                 case "JUMP": {

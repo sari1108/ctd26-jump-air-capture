@@ -13,6 +13,12 @@ final class WebSocketFrame {
     static final int OPCODE_PING = 0x9;
     static final int OPCODE_PONG = 0xA;
 
+    // A local two-player game never legitimately sends a frame anywhere near this
+    // size; rejecting oversized declared lengths up front avoids allocating an
+    // attacker- or corruption-controlled byte[] (which could OOM the process or,
+    // for a negative cast, throw NegativeArraySizeException deep in readFully).
+    private static final long MAX_PAYLOAD_BYTES = 16L * 1024 * 1024;
+
     final int opcode;
     final byte[] payload;
 
@@ -82,6 +88,10 @@ final class WebSocketFrame {
             for (int i = 0; i < 8; i++) {
                 len = (len << 8) | readByte(in);
             }
+        }
+
+        if (len > MAX_PAYLOAD_BYTES) {
+            throw new IOException("WebSocket frame too large: " + len + " bytes");
         }
 
         byte[] maskKey = null;

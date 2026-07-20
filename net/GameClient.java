@@ -23,7 +23,7 @@ public class GameClient implements AutoCloseable {
             connection.close();
             throw new IOException("Login failed: " + reason);
         }
-        this.elo = Integer.parseInt(reply.split("\\s+")[1]);
+        this.elo = parseElo(reply);
 
         Thread reader = new Thread(() -> readLoop(listener), "game-client-read");
         reader.setDaemon(true);
@@ -34,11 +34,30 @@ public class GameClient implements AutoCloseable {
         return elo;
     }
 
+    private static int parseElo(String loginOkReply) throws IOException {
+        String[] parts = loginOkReply.split("\\s+");
+        if (parts.length < 2) {
+            throw new IOException("Malformed LOGIN_OK reply: " + loginOkReply);
+        }
+        try {
+            return Integer.parseInt(parts[1]);
+        } catch (NumberFormatException e) {
+            throw new IOException("Malformed LOGIN_OK reply: " + loginOkReply);
+        }
+    }
+
     private void readLoop(GameClientListener listener) {
         try {
             String message;
             while (running && (message = connection.receiveText()) != null) {
-                dispatch(message, listener);
+                try {
+                    dispatch(message, listener);
+                } catch (RuntimeException e) {
+                    // A single malformed/unexpected server message (bad GAMESTATE encoding,
+                    // a command missing an argument, ...) shouldn't take down the reader
+                    // thread - log it and keep listening for the next one.
+                    System.out.println("Ignoring malformed server message '" + message + "': " + e);
+                }
             }
         } catch (IOException e) {
             if (running) System.out.println("Disconnected from server: " + e.getMessage());

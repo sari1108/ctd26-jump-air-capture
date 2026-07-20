@@ -1,7 +1,7 @@
 import java.util.Objects;
 
 public class Position {
-    private int r, c;
+    private final int r, c;
 
     public Position(int r, int c) {
         this.r = r;

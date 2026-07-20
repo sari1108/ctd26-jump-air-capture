@@ -5,12 +5,17 @@ import java.util.List;
 // WebSocket wire - no JSON library available, so plain delimited text, in
 // the same spirit as the project's existing hand-rolled sprite-config reader.
 final class GameSnapshotCodec {
+    // Bump this whenever a field is added/removed/reordered below, so a client and
+    // server running mismatched versions fail loudly on decode() instead of the
+    // positional index math silently reading the wrong field.
+    private static final int PROTOCOL_VERSION = 1;
+
     private GameSnapshotCodec() {
     }
 
     static String encode(GameSnapshot snapshot) {
         StringBuilder sb = new StringBuilder();
-        sb.append("GAMESTATE\n");
+        sb.append("GAMESTATE ").append(PROTOCOL_VERSION).append('\n');
         sb.append(snapshot.getBoardRows()).append(',').append(snapshot.getBoardCols()).append('\n');
         sb.append(snapshot.isGameOver()).append(',')
                 .append(snapshot.getWinner() == null ? "-" : snapshot.getWinner()).append(',')
@@ -43,10 +48,15 @@ final class GameSnapshotCodec {
     static GameSnapshot decode(String text) {
         String[] lines = text.split("\n", -1);
         int i = 0;
-        if (!lines[i].equals("GAMESTATE")) {
+        String[] header = lines[i++].split(" ");
+        if (header.length != 2 || !header[0].equals("GAMESTATE")) {
             throw new IllegalArgumentException("Not a GAMESTATE payload");
         }
-        i++;
+        int version = Integer.parseInt(header[1]);
+        if (version != PROTOCOL_VERSION) {
+            throw new IllegalArgumentException(
+                    "Unsupported GAMESTATE version: " + version + " (expected " + PROTOCOL_VERSION + ")");
+        }
 
         String[] dims = lines[i++].split(",");
         int rows = Integer.parseInt(dims[0]);

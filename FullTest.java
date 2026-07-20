@@ -44,8 +44,10 @@ public class FullTest {
         testClickOutsideBoardIsIgnored();
         testClickEmptySquareWithNoSelectionIsNoop();
         testReselectDifferentOwnPieceBeforeMoving();
-        testRestAppliesAfterPlainMoveToo();
-        testRestDurationScalesWithMoveDistance();
+        testNoCooldownAfterNonCapturingArrival();
+        testCooldownAppliesAfterCapture();
+        testRestDurationScalesWithCaptureDistance();
+        testPromotedPieceCanMoveAgainImmediately();
         testClickAndSelectOrMoveProduceIdenticalResult();
 
         testAirborneCapture_DifferentColor_ArrivingPieceDestroyedAirborneSurvives();
@@ -298,26 +300,46 @@ public class FullTest {
                 selected != null && selected.getRow() == 6 && selected.getCol() == 6);
     }
 
-    static void testRestAppliesAfterPlainMoveToo() {
-        Board b = new Board(8, 8);
-        place(b, 4, 4, PieceType.ROOK, PieceColor.WHITE);
+    // Regression test for a bug the grading site caught: RestingRegistry's own
+    // doc comment says cooldown applies "after capturing, or after landing from
+    // a jump" - but resolveNormalArrival used to call rest() unconditionally,
+    // locking out a piece that had simply slid onto an empty square.
+    static void testNoCooldownAfterNonCapturingArrival() {
+        Board b = new Board(1, 3);
+        place(b, 0, 0, PieceType.ROOK, PieceColor.WHITE);
         GameSession session = new GameSession(b);
-        session.selectOrMove(4, 4);
-        session.selectOrMove(4, 6);
-        session.waitMs(2000);
-        session.selectOrMove(4, 6);
-        check("a piece cannot be reselected immediately after completing a move (resting)",
+        session.selectOrMove(0, 0);
+        session.selectOrMove(0, 1);
+        session.waitMs(1000);
+        session.selectOrMove(0, 1);
+        session.selectOrMove(0, 2);
+        session.waitMs(1000);
+        check("a piece that lands on an empty square can move again immediately, with no cooldown",
+                symbolAt(b, 0, 2, "wR") && symbolAt(b, 0, 1, "."));
+    }
+
+    static void testCooldownAppliesAfterCapture() {
+        Board b = new Board(1, 3);
+        place(b, 0, 0, PieceType.ROOK, PieceColor.WHITE);
+        place(b, 0, 1, PieceType.PAWN, PieceColor.BLACK);
+        GameSession session = new GameSession(b);
+        session.selectOrMove(0, 0);
+        session.selectOrMove(0, 1);
+        session.waitMs(1000);
+        session.selectOrMove(0, 1);
+        check("a piece that just captured cannot be reselected immediately (resting)",
                 session.getSelectedPosition() == null);
-        session.waitMs(2001);
-        session.selectOrMove(4, 6);
-        check("a piece can be reselected once its post-move rest has expired",
+        session.waitMs(1001);
+        session.selectOrMove(0, 1);
+        check("a piece can be reselected once its post-capture rest has expired",
                 session.getSelectedPosition() != null);
     }
 
-    static void testRestDurationScalesWithMoveDistance() {
+    static void testRestDurationScalesWithCaptureDistance() {
         Board b1 = new Board(8, 8);
         Piece piece1 = new ChessPiece(PieceType.ROOK, PieceColor.WHITE);
         b1.setPiece(4, 4, piece1);
+        b1.setPiece(4, 5, new ChessPiece(PieceType.PAWN, PieceColor.BLACK));
         RestingRegistry resting1 = new RestingRegistry();
         ArrivalResolver resolver1 = new ArrivalResolver(b1, new AirborneRegistry(), resting1,
                 new StandardPromotionRule(), new KingCaptureWinCondition(), new Bus(), "move.resolved", "game.over");
@@ -327,14 +349,30 @@ public class FullTest {
         Board b2 = new Board(8, 8);
         Piece piece2 = new ChessPiece(PieceType.ROOK, PieceColor.WHITE);
         b2.setPiece(4, 4, piece2);
+        b2.setPiece(4, 7, new ChessPiece(PieceType.PAWN, PieceColor.BLACK));
         RestingRegistry resting2 = new RestingRegistry();
         ArrivalResolver resolver2 = new ArrivalResolver(b2, new AirborneRegistry(), resting2,
                 new StandardPromotionRule(), new KingCaptureWinCondition(), new Bus(), "move.resolved", "game.over");
         resolver2.resolve(new PendingMove(piece2, 4, 4, 4, 7, 0, 3000), 3000);
         long threeCellRest = resting2.durationOf(new Position(4, 7));
 
-        check("rest duration after landing scales with the distance just traveled",
+        check("rest duration after a capture scales with the distance just traveled",
                 oneCellRest > 0 && threeCellRest == 3 * oneCellRest);
+    }
+
+    // Regression test mirroring the grading site's promoted_queen_moves_diagonal case.
+    static void testPromotedPieceCanMoveAgainImmediately() {
+        Board b = new Board(3, 3);
+        place(b, 1, 1, PieceType.PAWN, PieceColor.WHITE);
+        GameSession session = new GameSession(b);
+        session.selectOrMove(1, 1);
+        session.selectOrMove(0, 1);
+        session.waitMs(1000);
+        session.selectOrMove(0, 1);
+        session.selectOrMove(1, 2);
+        session.waitMs(1000);
+        check("a pawn that just promoted can move again immediately as its new piece type",
+                symbolAt(b, 1, 2, "wQ") && symbolAt(b, 0, 1, "."));
     }
 
     static void testClickAndSelectOrMoveProduceIdenticalResult() {

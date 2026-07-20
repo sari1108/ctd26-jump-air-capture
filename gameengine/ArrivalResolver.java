@@ -89,8 +89,13 @@ public class ArrivalResolver {
         Piece arrivedPiece = promotionRule.apply(move.getPiece(), move.getToRow(), board);
         board.setPiece(move.getToRow(), move.getToCol(), arrivedPiece);
 
-        int distance = Math.max(Math.abs(move.getToRow() - move.getFromRow()), Math.abs(move.getToCol() - move.getFromCol()));
-        restingRegistry.rest(move.toPosition(), currentTime, distance * GameConfig.LONG_REST_DURATION_MS, PieceVisualState.LONG_REST);
+        // Cooldown only applies after capturing (or, separately, after landing from a
+        // jump - see AirborneRegistry.landExpired) - a piece that just slid onto an
+        // empty square is immediately free to move again.
+        if (wasCapture) {
+            int distance = Math.max(Math.abs(move.getToRow() - move.getFromRow()), Math.abs(move.getToCol() - move.getFromCol()));
+            restingRegistry.rest(move.toPosition(), currentTime, distance * GameConfig.LONG_REST_DURATION_MS, PieceVisualState.LONG_REST);
+        }
 
         bus.publish(moveResolvedTopic, new MoveEvent(move.getPiece(), new Position(move.getFromRow(), move.getFromCol()),
                 move.toPosition(), wasCapture, wasCapture ? target : null, currentTime));

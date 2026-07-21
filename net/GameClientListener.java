@@ -12,4 +12,7 @@ public interface GameClientListener {
     default void onMoveResolved(MoveEvent event) {}
     default void onGameOver(GameOverEvent event) {}
     default void onGameStarted(GameStartedEvent event) {}
+    default void onRoomCreated(String roomId) {}
+    default void onRoomNotFound(String roomId) {}
+    default void onSpectateJoined(String roomId, String whiteUsername, String blackUsername) {}
 }

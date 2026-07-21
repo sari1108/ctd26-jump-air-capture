@@ -23,6 +23,7 @@ public class MatchmakingServer {
     private final UserDatabase userDatabase;
     private final ActivityLog log;
     private final Supplier<GameSession> sessionFactory;
+    private final RoomRegistry roomRegistry;
     private final List<QueueEntry> queue = new ArrayList<>();
     private final Object queueLock = new Object();
     private volatile boolean running = false;
@@ -32,6 +33,7 @@ public class MatchmakingServer {
         this.userDatabase = userDatabase;
         this.log = log;
         this.sessionFactory = sessionFactory;
+        this.roomRegistry = new RoomRegistry(userDatabase, log, sessionFactory);
     }
 
     public void start() throws IOException {
@@ -126,26 +128,37 @@ public class MatchmakingServer {
         while (true) {
             String cmd = connection.receiveText();
             if (cmd == null) return;
-            if (!"PLAY".equals(cmd.trim())) continue;
+            String trimmed = cmd.trim();
 
-            connection.sendText("SEARCHING");
-            log.log(username + " joined the matchmaking queue (elo " + elo + ")");
-            QueueEntry entry = new QueueEntry(connection, username, elo);
-            synchronized (queueLock) {
-                queue.add(entry);
-            }
+            if ("PLAY".equals(trimmed)) {
+                connection.sendText("SEARCHING");
+                log.log(username + " joined the matchmaking queue (elo " + elo + ")");
+                QueueEntry entry = new QueueEntry(connection, username, elo);
+                synchronized (queueLock) {
+                    queue.add(entry);
+                }
 
-            try {
-                entry.resolved.await();
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return;
-            }
+                try {
+                    entry.resolved.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    return;
+                }
 
-            if (!entry.timedOut) {
+                if (!entry.timedOut) {
+                    return; // matched - the new Match now owns reading from this connection
+                }
+                // timed out with no match: loop back and wait for this player to hit Play again
+            } else if ("CREATE_ROOM".equals(trimmed)) {
+                roomRegistry.create(connection, username, elo);
                 return; // matched - the new Match now owns reading from this connection
+            } else if (trimmed.startsWith("JOIN_ROOM ")) {
+                String roomId = trimmed.substring("JOIN_ROOM ".length()).trim();
+                if (roomRegistry.join(roomId, connection, username, elo)) {
+                    return; // ownership handed off (became Black, or attached as a spectator)
+                }
+                // room code not found: loop back, stay in the lobby
             }
-            // timed out with no match: loop back and wait for this player to hit Play again
         }
     }
 

@@ -9,13 +9,23 @@ import javax.swing.SwingUtilities;
 // go, differ.
 public class NetworkGameWindow extends BoardWindow {
     private final GameClient gameClient;
+    private final boolean spectator;
     private volatile GameSnapshot latestSnapshot;
 
     public NetworkGameWindow(GameClient gameClient, int rows, int cols,
                               String whiteName, String blackName,
                               ScoreTracker scoreTracker, MovesLog movesLog) {
-        super("Board (network)", rows, cols, whiteName, blackName, scoreTracker, movesLog);
+        this(gameClient, rows, cols, whiteName, blackName, scoreTracker, movesLog, false);
+    }
+
+    // spectator=true opens the same board/rendering with no interaction: a room's
+    // third-and-later joiners watch the match already in progress but own no seat.
+    public NetworkGameWindow(GameClient gameClient, int rows, int cols,
+                              String whiteName, String blackName,
+                              ScoreTracker scoreTracker, MovesLog movesLog, boolean spectator) {
+        super(spectator ? "Board (spectating)" : "Board (network)", rows, cols, whiteName, blackName, scoreTracker, movesLog);
         this.gameClient = gameClient;
+        this.spectator = spectator;
         show();
     }
 
@@ -41,6 +51,8 @@ public class NetworkGameWindow extends BoardWindow {
 
     @Override
     protected void handleClick(MouseEvent e) {
+        if (spectator) return; // view-only - nothing a spectator clicks can act on the game
+
         int[] cell = cellAt(e);
         if (cell == null) return;
 

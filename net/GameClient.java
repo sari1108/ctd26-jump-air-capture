@@ -92,6 +92,13 @@ public class GameClient implements AutoCloseable {
             listener.onGameOver(GameEventCodec.decodeGameOver(message));
         } else if (message.startsWith("GAMESTARTED ")) {
             listener.onGameStarted(GameEventCodec.decodeGameStarted(message));
+        } else if (message.startsWith("ROOM_CREATED ")) {
+            listener.onRoomCreated(message.substring("ROOM_CREATED ".length()).trim());
+        } else if (message.startsWith("ROOM_NOT_FOUND ")) {
+            listener.onRoomNotFound(message.substring("ROOM_NOT_FOUND ".length()).trim());
+        } else if (message.startsWith("SPECTATE_JOINED ")) {
+            String[] parts = message.split("\\s+");
+            listener.onSpectateJoined(parts[1], parts[2], parts[3]);
         }
     }
 
@@ -109,6 +116,14 @@ public class GameClient implements AutoCloseable {
 
     public void sendDeselect() {
         send("DESELECT");
+    }
+
+    public void sendCreateRoom() {
+        send("CREATE_ROOM");
+    }
+
+    public void sendJoinRoom(String roomId) {
+        send("JOIN_ROOM " + roomId);
     }
 
     private void send(String message) {

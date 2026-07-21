@@ -1,5 +1,7 @@
 import java.io.IOException;
 import java.sql.SQLException;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 
 // One active game between two already-matched, already-seated players. Owns
 // its own fresh GameSession (so multiple matches can run at once on the same
@@ -16,6 +18,7 @@ public class Match {
     private final ActivityLog log;
     private final Seat white;
     private final Seat black;
+    private final List<WebSocketConnection> spectators = new CopyOnWriteArrayList<>();
     private final Object lock = new Object();
     private volatile boolean running = true;
 
@@ -70,6 +73,31 @@ public class Match {
         reader.start();
     }
 
+    public String getWhiteUsername() { return white.username; }
+    public String getBlackUsername() { return black.username; }
+
+    // Attaches a new read-only viewer to a match already in progress: sends them the
+    // player names immediately (they missed the one-time NAMES broadcast at match
+    // start), then just watches for disconnect - a spectator owns no seat, so nothing
+    // it sends can act on the game.
+    public void addSpectator(WebSocketConnection connection, String username) {
+        sendSafely(connection, "NAMES " + white.username + " " + black.username);
+        spectators.add(connection);
+
+        Thread reader = new Thread(() -> {
+            try {
+                while (connection.receiveText() != null) {
+                    // no-op: a spectator has no seat to act with
+                }
+            } catch (IOException ignored) {
+            }
+            spectators.remove(connection);
+            log.log(username + " stopped spectating.");
+        }, "match-spectate-" + username);
+        reader.setDaemon(true);
+        reader.start();
+    }
+
     private void handleDisconnect(Seat self, Seat opponent) {
         if (!running || !self.connected) return;
         self.connected = false;
@@ -80,6 +108,9 @@ public class Match {
             for (long remaining = DISCONNECT_GRACE_MS; remaining > 0; remaining -= 1000) {
                 if (!running) return;
                 sendTo(opponent, "OPPONENT_DISCONNECTED " + (remaining / 1000));
+                for (WebSocketConnection spec : spectators) {
+                    sendSafely(spec, "OPPONENT_DISCONNECTED " + (remaining / 1000));
+                }
                 try {
                     Thread.sleep(1000);
                 } catch (InterruptedException e) {
@@ -170,16 +201,22 @@ public class Match {
             lastTick = now;
 
             // Personalized per seat: board/pending-moves/game-over state is identical for
-            // both, but each seat's "selected square" and legal-move highlights are its
-            // own (see GameSession.snapshot(PieceColor)) - never the other seat's.
-            String encodedWhite, encodedBlack;
+            // everyone, but each seat's "selected square" and legal-move highlights are
+            // its own (see GameSession.snapshot(PieceColor)) - never the other seat's.
+            // Spectators get the neutral, never-touched-by-network-play legacy snapshot,
+            // which is always "nothing selected" - exactly right for a passive viewer.
+            String encodedWhite, encodedBlack, encodedSpectator;
             synchronized (lock) {
                 session.waitMs(elapsed);
                 encodedWhite = GameSnapshotCodec.encode(session.snapshot(PieceColor.WHITE));
                 encodedBlack = GameSnapshotCodec.encode(session.snapshot(PieceColor.BLACK));
+                encodedSpectator = GameSnapshotCodec.encode(session.snapshot());
             }
             sendTo(white, encodedWhite);
             sendTo(black, encodedBlack);
+            for (WebSocketConnection spec : spectators) {
+                sendSafely(spec, encodedSpectator);
+            }
 
             try {
                 Thread.sleep(TICK_MS);
@@ -193,6 +230,9 @@ public class Match {
     private void broadcast(String text) {
         sendTo(white, text);
         sendTo(black, text);
+        for (WebSocketConnection spec : spectators) {
+            sendSafely(spec, text);
+        }
     }
 
     private void sendTo(Seat seat, String text) {
@@ -201,6 +241,14 @@ public class Match {
             seat.connection.sendText(text);
         } catch (IOException ignored) {
             // the reader thread for this seat will notice the same failure and run handleDisconnect
+        }
+    }
+
+    private void sendSafely(WebSocketConnection connection, String text) {
+        try {
+            connection.sendText(text);
+        } catch (IOException ignored) {
+            // the spectator's own reader thread will notice the same failure and drop them
         }
     }
 

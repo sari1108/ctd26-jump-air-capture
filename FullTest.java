@@ -53,6 +53,9 @@ public class FullTest {
         testAirborneCapture_DifferentColor_ArrivingPieceDestroyedAirborneSurvives();
         testAirborneLanding_SameColor_MoveAbortsPieceStaysAtOrigin();
 
+        testNetworkSelection_WhiteAndBlackSelectionsAreIndependent();
+        testNetworkSelection_InterleavedClicksDoNotHijackEachOthersMove();
+
         System.out.println("\n==== " + pass + " passed, " + fail + " failed ====");
         System.exit(fail > 0 ? 1 : 0);
     }
@@ -451,6 +454,49 @@ public class FullTest {
                 airborneRegistry.isAirborne(new Position(4, 6)));
         check("same-color airborne landing publishes no event for the aborted move", published.isEmpty());
         check("same-color airborne landing never ends the game", !outcome.gameOver);
+    }
+
+    // ---------- network per-color selection (regression: selection used to be one
+    // shared slot for the whole session, so two seats clicking near-simultaneously
+    // could steal or corrupt each other's in-progress selection) ----------
+
+    static void testNetworkSelection_WhiteAndBlackSelectionsAreIndependent() {
+        Board b = new Board(8, 8);
+        place(b, 4, 4, PieceType.ROOK, PieceColor.WHITE);
+        place(b, 4, 6, PieceType.ROOK, PieceColor.BLACK);
+        GameSession session = new GameSession(b);
+
+        session.selectOrMove(PieceColor.WHITE, 4, 4);
+        session.selectOrMove(PieceColor.BLACK, 4, 6);
+
+        Position whiteSel = session.getSelectedPosition(PieceColor.WHITE);
+        Position blackSel = session.getSelectedPosition(PieceColor.BLACK);
+        check("white's selection is unaffected by black selecting a piece afterwards",
+                whiteSel != null && whiteSel.getRow() == 4 && whiteSel.getCol() == 4);
+        check("black's own selection is tracked independently of white's",
+                blackSel != null && blackSel.getRow() == 4 && blackSel.getCol() == 6);
+    }
+
+    // Reproduces the exact interleaving that used to break: white selects a piece,
+    // then black selects one of its own before white clicks the destination. With a
+    // single shared selection, black's click would hijack it and white's own move
+    // would silently fail (or apply to the wrong piece). Per-color selection makes
+    // this interleaving order irrelevant - each seat only ever touches its own slot.
+    static void testNetworkSelection_InterleavedClicksDoNotHijackEachOthersMove() {
+        Board b = new Board(8, 8);
+        place(b, 4, 4, PieceType.ROOK, PieceColor.WHITE);
+        place(b, 4, 6, PieceType.ROOK, PieceColor.BLACK);
+        GameSession session = new GameSession(b);
+
+        session.selectOrMove(PieceColor.WHITE, 4, 4);  // white selects its rook
+        session.selectOrMove(PieceColor.BLACK, 4, 6);  // black selects its own rook in between
+        session.selectOrMove(PieceColor.WHITE, 4, 0);  // white completes its own move
+        session.waitMs(4000);                          // distance 4 -> travel 4000ms
+
+        check("white's move completes correctly despite black selecting in between",
+                symbolAt(b, 4, 0, "wR") && symbolAt(b, 4, 4, "."));
+        check("black's own selection survived white's move untouched",
+                session.getSelectedPosition(PieceColor.BLACK) != null);
     }
 
     // ---------- helpers ----------

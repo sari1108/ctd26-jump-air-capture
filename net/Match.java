@@ -136,8 +136,9 @@ public class Match {
                 case "CLICK": {
                     int row = Integer.parseInt(parts[1]);
                     int col = Integer.parseInt(parts[2]);
-                    if (session.getSelectedPosition() == null && !ownsPieceAt(seat, row, col)) return;
-                    session.selectOrMove(row, col);
+                    PieceColor color = PieceColor.valueOf(seat.color);
+                    if (session.getSelectedPosition(color) == null && !ownsPieceAt(seat, row, col)) return;
+                    session.selectOrMove(color, row, col);
                     break;
                 }
                 case "JUMP": {
@@ -148,7 +149,7 @@ public class Match {
                     break;
                 }
                 case "DESELECT":
-                    session.deselect();
+                    session.deselect(PieceColor.valueOf(seat.color));
                     break;
                 default:
                     log.log("Unknown in-match command from " + seat.username + ": " + message);
@@ -168,12 +169,17 @@ public class Match {
             long elapsed = now - lastTick;
             lastTick = now;
 
-            String encoded;
+            // Personalized per seat: board/pending-moves/game-over state is identical for
+            // both, but each seat's "selected square" and legal-move highlights are its
+            // own (see GameSession.snapshot(PieceColor)) - never the other seat's.
+            String encodedWhite, encodedBlack;
             synchronized (lock) {
                 session.waitMs(elapsed);
-                encoded = GameSnapshotCodec.encode(session.snapshot());
+                encodedWhite = GameSnapshotCodec.encode(session.snapshot(PieceColor.WHITE));
+                encodedBlack = GameSnapshotCodec.encode(session.snapshot(PieceColor.BLACK));
             }
-            broadcast(encoded);
+            sendTo(white, encodedWhite);
+            sendTo(black, encodedBlack);
 
             try {
                 Thread.sleep(TICK_MS);

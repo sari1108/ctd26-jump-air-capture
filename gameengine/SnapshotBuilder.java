@@ -11,19 +11,20 @@ public class SnapshotBuilder {
     private final PendingMoveQueue pendingMoves;
     private final AirborneRegistry airborneRegistry;
     private final RestingRegistry restingRegistry;
-    private final PieceSelection selection;
 
     public SnapshotBuilder(Board board, Map<PieceType, MoveValidator> validators, PendingMoveQueue pendingMoves,
-                            AirborneRegistry airborneRegistry, RestingRegistry restingRegistry, PieceSelection selection) {
+                            AirborneRegistry airborneRegistry, RestingRegistry restingRegistry) {
         this.board = board;
         this.validators = validators;
         this.pendingMoves = pendingMoves;
         this.airborneRegistry = airborneRegistry;
         this.restingRegistry = restingRegistry;
-        this.selection = selection;
     }
 
-    public GameSnapshot build(long currentTime, boolean isGameOver, String winner, long gameOverAt,
+    // selection is passed in rather than held as a field: local play always uses its
+    // one shared selection, network play passes whichever color's own selection the
+    // snapshot is being built for (see GameSession.snapshot(PieceColor)).
+    public GameSnapshot build(PieceSelection selection, long currentTime, boolean isGameOver, String winner, long gameOverAt,
                                Position rejectedPosition, long rejectedAt) {
         List<PieceSnapshot> pieces = new ArrayList<>();
 
@@ -69,7 +70,7 @@ public class SnapshotBuilder {
         Position selected = selection.isActive() ? selection.getPosition() : null;
         Position rejected = (rejectedPosition != null && currentTime - rejectedAt <= GameConfig.REJECTED_MOVE_FLASH_MS)
                 ? rejectedPosition : null;
-        List<Position> legalMoves = legalDestinationsFromSelection();
+        List<Position> legalMoves = legalDestinationsFromSelection(selection);
         long msSinceGameOver = (isGameOver && gameOverAt >= 0) ? currentTime - gameOverAt : 0;
         return new GameSnapshot(board.getRows(), board.getCols(), pieces, selected, rejected, legalMoves,
                 isGameOver, winner, currentTime, msSinceGameOver);
@@ -77,7 +78,7 @@ public class SnapshotBuilder {
 
     // Every square the currently-selected piece could legally move to right now -
     // purely informational for the View (e.g. to highlight them); doesn't affect play.
-    private List<Position> legalDestinationsFromSelection() {
+    private List<Position> legalDestinationsFromSelection(PieceSelection selection) {
         List<Position> result = new ArrayList<>();
         if (!selection.isActive()) return result;
 

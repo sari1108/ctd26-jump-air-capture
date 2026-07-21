@@ -12,7 +12,13 @@ public class GameSession {
     private final PendingMoveQueue pendingMoves = new PendingMoveQueue();
     private final AirborneRegistry airborneRegistry = new AirborneRegistry();
     private final RestingRegistry restingRegistry = new RestingRegistry();
+
+    // Local play (one human, one mouse) has exactly one thing selected at a
+    // time regardless of color, so it shares this single slot. Network play
+    // has two independent actors - see whiteSelection/blackSelection below.
     private final PieceSelection selection = new PieceSelection();
+    private final PieceSelection whiteSelection = new PieceSelection();
+    private final PieceSelection blackSelection = new PieceSelection();
 
     private final ArrivalResolver arrivalResolver;
     private final SnapshotBuilder snapshotBuilder;
@@ -37,7 +43,7 @@ public class GameSession {
         this.arrivalResolver = new ArrivalResolver(board, airborneRegistry, restingRegistry,
                 promotionRule, winConditionRule, bus, TOPIC_MOVE_RESOLVED, TOPIC_GAME_OVER);
         this.snapshotBuilder = new SnapshotBuilder(board, validators, pendingMoves,
-                airborneRegistry, restingRegistry, selection);
+                airborneRegistry, restingRegistry);
     }
 
     // Pixel-coordinate entry point (kept for the console protocol in Main.java and
@@ -48,17 +54,29 @@ public class GameSession {
     }
 
     public void selectOrMove(int r, int c) {
+        selectOrMove(selection, r, c);
+    }
+
+    // Network entry point: white and black are independent actors clicking over
+    // separate connections, possibly within the same tick. Routing through each
+    // color's own PieceSelection means one player's click can never read or
+    // overwrite the other's in-progress selection.
+    public void selectOrMove(PieceColor actingColor, int r, int c) {
+        selectOrMove(selectionFor(actingColor), r, c);
+    }
+
+    private void selectOrMove(PieceSelection sel, int r, int c) {
         if (isGameOver) return;
         if (!board.isWithinBounds(r, c)) return;
 
         Piece clickedPiece = board.getPiece(r, c);
-        if (!selection.isActive()) {
-            trySelect(clickedPiece, r, c);
+        if (!sel.isActive()) {
+            trySelect(sel, clickedPiece, r, c);
             return;
         }
 
-        Position selectedPosition = selection.getPosition();
-        Piece selectedPiece = selection.getPiece();
+        Position selectedPosition = sel.getPosition();
+        Piece selectedPiece = sel.getPiece();
         MoveValidator v = validators.get(selectedPiece.getType());
         if (v != null && v.isValid(selectedPosition.getRow(), selectedPosition.getCol(), r, c, board)) {
             Position destPos = new Position(r, c);
@@ -66,7 +84,7 @@ public class GameSession {
                 Piece airbornePiece = airborneRegistry.get(destPos).getPiece();
                 if (selectedPiece.getColor() == airbornePiece.getColor()) {
                     flagRejected(destPos);
-                    selection.clear();
+                    sel.clear();
                     return;
                 }
             }
@@ -79,15 +97,19 @@ public class GameSession {
             if (resolved != null) {
                 pendingMoves.add(resolved);
             }
-            selection.clear();
+            sel.clear();
         } else {
             Position beforeSelection = selectedPosition;
-            trySelect(clickedPiece, r, c);
-            Position afterSelection = selection.isActive() ? selection.getPosition() : null;
+            trySelect(sel, clickedPiece, r, c);
+            Position afterSelection = sel.isActive() ? sel.getPosition() : null;
             if (afterSelection == null || afterSelection.equals(beforeSelection)) {
                 flagRejected(new Position(r, c));
             }
         }
+    }
+
+    private PieceSelection selectionFor(PieceColor color) {
+        return color == PieceColor.BLACK ? blackSelection : whiteSelection;
     }
 
     private void flagRejected(Position pos) {
@@ -131,7 +153,14 @@ public class GameSession {
 
     public Position getSelectedPosition() { return selection.isActive() ? selection.getPosition() : null; }
 
+    public Position getSelectedPosition(PieceColor color) {
+        PieceSelection sel = selectionFor(color);
+        return sel.isActive() ? sel.getPosition() : null;
+    }
+
     public void deselect() { selection.clear(); }
+
+    public void deselect(PieceColor color) { selectionFor(color).clear(); }
 
     // Everything that wants to react to this session (score, moves log, sound,
     // animations, ...) subscribes to this bus - the engine never knows who's listening.
@@ -154,15 +183,22 @@ public class GameSession {
         bus.publish(TOPIC_GAME_OVER, new GameOverEvent(winner, currentTime));
     }
 
-    private void trySelect(Piece clickedPiece, int r, int c) {
+    private void trySelect(PieceSelection sel, Piece clickedPiece, int r, int c) {
         Position pos = new Position(r, c);
         if (clickedPiece != null && !clickedPiece.isEmpty() && !pendingMoves.hasMoveFrom(r, c)
                 && !restingRegistry.isResting(pos, currentTime)) {
-            selection.set(clickedPiece, pos);
+            sel.set(clickedPiece, pos);
         }
     }
 
     public GameSnapshot snapshot() {
-        return snapshotBuilder.build(currentTime, isGameOver, winner, gameOverAt, rejectedPosition, rejectedAt);
+        return snapshotBuilder.build(selection, currentTime, isGameOver, winner, gameOverAt, rejectedPosition, rejectedAt);
+    }
+
+    // Per-viewer snapshot: the board/pending-moves/airborne/game-over state is the
+    // same for everyone, but the "selected" square and legal-move highlights are
+    // this color's own - never the other seat's in-progress selection.
+    public GameSnapshot snapshot(PieceColor viewerColor) {
+        return snapshotBuilder.build(selectionFor(viewerColor), currentTime, isGameOver, winner, gameOverAt, rejectedPosition, rejectedAt);
     }
 }

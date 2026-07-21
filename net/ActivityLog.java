@@ -1,6 +1,8 @@
-import java.io.FileWriter;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.OutputStreamWriter;
 import java.io.PrintWriter;
+import java.nio.charset.StandardCharsets;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 
@@ -13,8 +15,11 @@ public final class ActivityLog implements AutoCloseable {
 
     private final PrintWriter writer;
 
+    // Explicit UTF-8, not FileWriter's platform-default charset - otherwise a
+    // non-ASCII username (e.g. Hebrew) logs as mojibake regardless of what the
+    // console itself is doing.
     public ActivityLog(String filePath) throws IOException {
-        writer = new PrintWriter(new FileWriter(filePath, true), true);
+        writer = new PrintWriter(new OutputStreamWriter(new FileOutputStream(filePath, true), StandardCharsets.UTF_8), true);
     }
 
     public synchronized void log(String message) {

@@ -14,6 +14,11 @@ public class ServerMain {
             "wR wN wB wQ wK wB wN wR\n";
 
     public static void main(String[] args) throws Exception {
+        // Windows' console defaults to a legacy codepage, not UTF-8 - without this,
+        // any non-ASCII username (e.g. Hebrew) a client sends prints here as mojibake.
+        System.setOut(new java.io.PrintStream(System.out, true, "UTF-8"));
+        System.setErr(new java.io.PrintStream(System.err, true, "UTF-8"));
+
         int port = args.length > 0 ? Integer.parseInt(args[0]) : 5000;
         String dbPath = args.length > 1 ? args[1] : "users.db";
 

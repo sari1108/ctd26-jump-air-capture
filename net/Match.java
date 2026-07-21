@@ -13,14 +13,16 @@ public class Match {
 
     private final GameSession session;
     private final UserDatabase userDatabase;
+    private final ActivityLog log;
     private final Seat white;
     private final Seat black;
     private final Object lock = new Object();
     private volatile boolean running = true;
 
-    public Match(GameSession session, UserDatabase userDatabase, Seat white, Seat black) {
+    public Match(GameSession session, UserDatabase userDatabase, ActivityLog log, Seat white, Seat black) {
         this.session = session;
         this.userDatabase = userDatabase;
+        this.log = log;
         this.white = white;
         this.black = black;
     }
@@ -61,7 +63,7 @@ public class Match {
     private void handleDisconnect(Seat self, Seat opponent) {
         if (!running || !self.connected) return;
         self.connected = false;
-        System.out.println(self.username + " disconnected mid-game; " + opponent.username + " wins in "
+        log.log(self.username + " disconnected mid-game; " + opponent.username + " wins in "
                 + (DISCONNECT_GRACE_MS / 1000) + "s unless they return.");
 
         Thread grace = new Thread(() -> {
@@ -105,11 +107,11 @@ public class Match {
             userDatabase.updateElo(white.username, newWhiteElo);
             userDatabase.updateElo(black.username, newBlackElo);
 
-            System.out.println("Match over, winner=" + event.winnerColor
+            log.log("Match over, winner=" + event.winnerColor
                     + ". ELO: " + white.username + " " + whiteElo + "->" + newWhiteElo
                     + ", " + black.username + " " + blackElo + "->" + newBlackElo);
         } catch (SQLException e) {
-            System.out.println("Failed to update ELO: " + e.getMessage());
+            log.log("Failed to update ELO: " + e.getMessage());
         }
     }
 
@@ -139,7 +141,7 @@ public class Match {
                     session.deselect();
                     break;
                 default:
-                    System.out.println("Unknown in-match command: " + message);
+                    log.log("Unknown in-match command from " + seat.username + ": " + message);
             }
         }
     }

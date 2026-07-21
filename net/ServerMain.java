@@ -18,12 +18,13 @@ public class ServerMain {
         String dbPath = args.length > 1 ? args[1] : "users.db";
 
         UserDatabase userDatabase = new UserDatabase(dbPath);
+        ActivityLog log = new ActivityLog("server.log");
 
-        MatchmakingServer server = new MatchmakingServer(port, userDatabase,
+        MatchmakingServer server = new MatchmakingServer(port, userDatabase, log,
                 () -> new GameSession(new BoardParser().parse(STARTING_POSITION)));
         server.start();
 
-        System.out.println("Server is up on port " + port + ". Waiting for players to log in and hit Play...");
+        log.log("Server is up on port " + port + ". Waiting for players to log in and hit Play...");
         Thread.currentThread().join();
     }
 }

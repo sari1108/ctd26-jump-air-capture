@@ -8,22 +8,27 @@ import java.net.Socket;
 // DESELECT commands the other way.
 public class GameClient implements AutoCloseable {
     private final WebSocketConnection connection;
+    private final ActivityLog log;
     private final int elo;
     private volatile boolean running = true;
 
     public GameClient(String host, int port, String username, String password,
-                       GameClientListener listener) throws IOException {
+                       ActivityLog log, GameClientListener listener) throws IOException {
+        this.log = log;
         Socket socket = new Socket(host, port);
         connection = WebSocketHandshake.clientHandshake(socket, host, port, "/");
+        log.log("Connected to " + host + ":" + port);
 
         connection.sendText("LOGIN " + username + " " + password);
         String reply = connection.receiveText();
         if (reply == null || !reply.startsWith("LOGIN_OK")) {
             String reason = reply == null ? "no_response" : reply;
+            log.log("Login failed for " + username + ": " + reason);
             connection.close();
             throw new IOException("Login failed: " + reason);
         }
         this.elo = parseElo(reply);
+        log.log("Logged in as " + username + " (elo " + elo + ")");
 
         Thread reader = new Thread(() -> readLoop(listener), "game-client-read");
         reader.setDaemon(true);
@@ -56,11 +61,11 @@ public class GameClient implements AutoCloseable {
                     // A single malformed/unexpected server message (bad GAMESTATE encoding,
                     // a command missing an argument, ...) shouldn't take down the reader
                     // thread - log it and keep listening for the next one.
-                    System.out.println("Ignoring malformed server message '" + message + "': " + e);
+                    log.log("Ignoring malformed server message '" + message + "': " + e);
                 }
             }
         } catch (IOException e) {
-            if (running) System.out.println("Disconnected from server: " + e.getMessage());
+            if (running) log.log("Disconnected from server: " + e.getMessage());
         }
     }
 
@@ -104,7 +109,7 @@ public class GameClient implements AutoCloseable {
         try {
             connection.sendText(message);
         } catch (IOException e) {
-            System.out.println("Failed to send to server: " + e.getMessage());
+            log.log("Failed to send to server: " + e.getMessage());
         }
     }
 

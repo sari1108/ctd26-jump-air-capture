@@ -1,3 +1,4 @@
+import java.io.IOException;
 import java.util.Scanner;
 import javax.swing.SwingUtilities;
 
@@ -7,10 +8,15 @@ import javax.swing.SwingUtilities;
 // and everything from there on is mouse clicks, exactly like local play.
 public class NetworkClientDemo implements GameClientListener {
     private final Scanner console = new Scanner(System.in);
+    private final ActivityLog log;
     private volatile NetworkGameWindow window;
     private volatile GameClient currentClient;
     private final Object matchLock = new Object();
     private volatile boolean matchDecided = false;
+
+    public NetworkClientDemo() throws IOException {
+        log = new ActivityLog("client-" + ProcessHandle.current().pid() + ".log");
+    }
 
     public static void main(String[] args) throws Exception {
         new NetworkClientDemo().run();
@@ -32,11 +38,12 @@ public class NetworkClientDemo implements GameClientListener {
             System.out.print("Password: ");
             String password = console.nextLine().trim();
             try {
-                client = new GameClient(host, port, username, password, this);
+                client = new GameClient(host, port, username, password, log, this);
                 currentClient = client;
                 System.out.println("Welcome, " + username + " (elo " + client.getElo() + ").");
             } catch (Exception e) {
                 System.out.println("Login failed: " + e.getMessage() + " - try again.");
+                log.log("Login attempt failed for " + username + ": " + e.getMessage());
             }
         }
 
@@ -57,11 +64,13 @@ public class NetworkClientDemo implements GameClientListener {
     @Override
     public void onSearching() {
         System.out.println("Searching for an opponent within 100 ELO... (up to 1 minute)");
+        log.log("Searching for an opponent (ELO range +-100, timeout 60s)");
     }
 
     @Override
     public void onNoMatch() {
         System.out.println("No opponent found in time.");
+        log.log("No opponent found in time.");
         synchronized (matchLock) {
             matchDecided = true;
             matchLock.notifyAll();
@@ -71,6 +80,7 @@ public class NetworkClientDemo implements GameClientListener {
     @Override
     public void onMatchFound(String color, String opponentUsername, int opponentElo) {
         System.out.println("Match found! You are " + color + ", opponent: " + opponentUsername + " (elo " + opponentElo + ")");
+        log.log("Match found: you=" + color + " opponent=" + opponentUsername + " (elo " + opponentElo + ")");
         String whiteName = "WHITE".equals(color) ? "You" : opponentUsername;
         String blackName = "BLACK".equals(color) ? "You" : opponentUsername;
 
@@ -98,6 +108,7 @@ public class NetworkClientDemo implements GameClientListener {
 
     @Override
     public void onOpponentDisconnected(int secondsRemaining) {
+        if (secondsRemaining == 0) log.log("Opponent's disconnect grace period expired.");
         if (window != null) window.onOpponentDisconnected(secondsRemaining);
     }
 }

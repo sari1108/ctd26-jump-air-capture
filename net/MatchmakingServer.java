@@ -21,21 +21,23 @@ public class MatchmakingServer {
 
     private final int port;
     private final UserDatabase userDatabase;
+    private final ActivityLog log;
     private final Supplier<GameSession> sessionFactory;
     private final List<QueueEntry> queue = new ArrayList<>();
     private final Object queueLock = new Object();
     private volatile boolean running = false;
 
-    public MatchmakingServer(int port, UserDatabase userDatabase, Supplier<GameSession> sessionFactory) {
+    public MatchmakingServer(int port, UserDatabase userDatabase, ActivityLog log, Supplier<GameSession> sessionFactory) {
         this.port = port;
         this.userDatabase = userDatabase;
+        this.log = log;
         this.sessionFactory = sessionFactory;
     }
 
     public void start() throws IOException {
         ServerSocket serverSocket = new ServerSocket(port);
         running = true;
-        System.out.println("MatchmakingServer listening on port " + port);
+        log.log("MatchmakingServer listening on port " + port);
 
         Thread accepter = new Thread(() -> acceptLoop(serverSocket), "matchmaking-accept");
         accepter.setDaemon(true);
@@ -50,12 +52,13 @@ public class MatchmakingServer {
         while (running) {
             try {
                 Socket socket = serverSocket.accept();
+                log.log("Connection accepted from " + socket.getRemoteSocketAddress());
                 WebSocketConnection connection = WebSocketHandshake.serverHandshake(socket);
                 Thread worker = new Thread(() -> loginThenLobby(connection), "login-lobby");
                 worker.setDaemon(true);
                 worker.start();
             } catch (IOException e) {
-                if (running) e.printStackTrace();
+                if (running) log.log("Accept loop error: " + e);
             }
         }
     }
@@ -66,12 +69,14 @@ public class MatchmakingServer {
         try {
             String message = connection.receiveText();
             if (message == null || !message.startsWith("LOGIN ")) {
+                log.log("Login rejected: protocol_error (message=" + message + ")");
                 connection.sendText("LOGIN_FAIL protocol_error");
                 connection.close();
                 return;
             }
             String[] parts = message.split("\\s+", 3);
             if (parts.length < 3) {
+                log.log("Login rejected: protocol_error (malformed LOGIN)");
                 connection.sendText("LOGIN_FAIL protocol_error");
                 connection.close();
                 return;
@@ -83,11 +88,13 @@ public class MatchmakingServer {
             try {
                 result = userDatabase.login(username, password);
             } catch (SQLException e) {
+                log.log("Login failed for " + username + ": server_error (" + e.getMessage() + ")");
                 connection.sendText("LOGIN_FAIL server_error");
                 connection.close();
                 return;
             }
             if (result == UserDatabase.LoginResult.WRONG_PASSWORD) {
+                log.log("Login rejected for " + username + ": wrong_password");
                 connection.sendText("LOGIN_FAIL wrong_password");
                 connection.close();
                 return;
@@ -96,13 +103,14 @@ public class MatchmakingServer {
             try {
                 elo = userDatabase.getElo(username);
             } catch (SQLException e) {
+                log.log("Login failed for " + username + ": server_error (" + e.getMessage() + ")");
                 connection.sendText("LOGIN_FAIL server_error");
                 connection.close();
                 return;
             }
 
             connection.sendText("LOGIN_OK " + elo);
-            System.out.println(username + " logged in (elo " + elo + ")");
+            log.log(username + " logged in (" + result + ", elo " + elo + ")");
         } catch (IOException e) {
             return;
         }
@@ -110,7 +118,7 @@ public class MatchmakingServer {
         try {
             lobbyLoop(connection, username, elo);
         } catch (IOException e) {
-            System.out.println(username + " disconnected from lobby: " + e.getMessage());
+            log.log(username + " disconnected from lobby: " + e.getMessage());
         }
     }
 
@@ -121,6 +129,7 @@ public class MatchmakingServer {
             if (!"PLAY".equals(cmd.trim())) continue;
 
             connection.sendText("SEARCHING");
+            log.log(username + " joined the matchmaking queue (elo " + elo + ")");
             QueueEntry entry = new QueueEntry(connection, username, elo);
             synchronized (queueLock) {
                 queue.add(entry);
@@ -182,6 +191,7 @@ public class MatchmakingServer {
             }
 
             for (QueueEntry entry : timedOut) {
+                log.log(entry.username + " gave up waiting: no opponent found within " + (SEARCH_TIMEOUT_MS / 1000) + "s");
                 sendSafely(entry.connection, "NO_MATCH");
                 entry.timedOut = true;
                 entry.resolved.countDown();
@@ -199,9 +209,10 @@ public class MatchmakingServer {
         sendSafely(a.connection, "MATCH_FOUND WHITE " + b.username + " " + b.elo);
         sendSafely(b.connection, "MATCH_FOUND BLACK " + a.username + " " + a.elo);
 
-        Match match = new Match(sessionFactory.get(), userDatabase, white, black);
+        Match match = new Match(sessionFactory.get(), userDatabase, log, white, black);
         match.start();
-        System.out.println("Match started: " + a.username + " (white) vs " + b.username + " (black)");
+        log.log("Match started: " + a.username + " (white, elo " + a.elo + ") vs "
+                + b.username + " (black, elo " + b.elo + ")");
 
         a.resolved.countDown();
         b.resolved.countDown();

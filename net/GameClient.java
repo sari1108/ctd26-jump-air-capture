@@ -86,6 +86,12 @@ public class GameClient implements AutoCloseable {
             listener.onNoMatch();
         } else if (message.startsWith("OPPONENT_DISCONNECTED")) {
             listener.onOpponentDisconnected(Integer.parseInt(message.split("\\s+")[1]));
+        } else if (message.startsWith("MOVE ")) {
+            listener.onMoveResolved(GameEventCodec.decodeMove(message));
+        } else if (message.startsWith("GAMEOVER ")) {
+            listener.onGameOver(GameEventCodec.decodeGameOver(message));
+        } else if (message.startsWith("GAMESTARTED ")) {
+            listener.onGameStarted(GameEventCodec.decodeGameStarted(message));
         }
     }
 

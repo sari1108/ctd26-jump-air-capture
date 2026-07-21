@@ -30,6 +30,16 @@ public class Match {
     public void start() {
         session.getBus().subscribe(GameSession.TOPIC_GAME_OVER, payload -> onGameOver((GameOverEvent) payload));
 
+        // Broadcast each bus event the instant it happens (not just baked into the next
+        // periodic GAMESTATE tick), so clients can drive score/move-log/sound off the
+        // same bus events local play uses - see GameEventCodec.
+        session.getBus().subscribe(GameSession.TOPIC_MOVE_RESOLVED,
+                payload -> broadcast(GameEventCodec.encodeMove((MoveEvent) payload)));
+        session.getBus().subscribe(GameSession.TOPIC_GAME_OVER,
+                payload -> broadcast(GameEventCodec.encodeGameOver((GameOverEvent) payload)));
+        session.getBus().subscribe(GameSession.TOPIC_GAME_STARTED,
+                payload -> broadcast(GameEventCodec.encodeGameStarted((GameStartedEvent) payload)));
+
         broadcast("NAMES " + white.username + " " + black.username);
 
         startReader(white, black);

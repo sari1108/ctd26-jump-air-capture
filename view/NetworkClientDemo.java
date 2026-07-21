@@ -11,6 +11,7 @@ public class NetworkClientDemo implements GameClientListener {
     private final ActivityLog log;
     private volatile NetworkGameWindow window;
     private volatile GameClient currentClient;
+    private volatile Bus matchBus;
     private final Object matchLock = new Object();
     private volatile boolean matchDecided = false;
 
@@ -86,8 +87,18 @@ public class NetworkClientDemo implements GameClientListener {
 
         try {
             SwingUtilities.invokeAndWait(() -> {
+                // Same wiring BoardDemo uses for local play: ScoreTracker/MovesLog/SoundEffects
+                // are plain Bus subscribers that don't care where events come from. Here they
+                // come from the server's MOVE/GAMEOVER/GAMESTARTED broadcasts, decoded and
+                // re-published on this client-local bus (see onMoveResolved/onGameOver/onGameStarted).
+                Bus bus = new Bus();
                 ScoreTracker scoreTracker = new ScoreTracker();
                 MovesLog movesLog = new MovesLog(8);
+                scoreTracker.subscribe(bus);
+                movesLog.subscribe(bus);
+                new SoundEffects().subscribe(bus);
+                matchBus = bus;
+
                 window = new NetworkGameWindow(currentClient, 8, 8, whiteName, blackName, scoreTracker, movesLog);
                 window.onNames(whiteName, blackName);
             });
@@ -110,5 +121,32 @@ public class NetworkClientDemo implements GameClientListener {
     public void onOpponentDisconnected(int secondsRemaining) {
         if (secondsRemaining == 0) log.log("Opponent's disconnect grace period expired.");
         if (window != null) window.onOpponentDisconnected(secondsRemaining);
+    }
+
+    @Override
+    public void onMoveResolved(MoveEvent event) {
+        log.log("Move: " + event.piece.getColor() + " " + event.piece.getType()
+                + " " + square(event.from) + "->" + square(event.to)
+                + (event.wasCapture ? " captures " + event.capturedPiece.getColor() + " " + event.capturedPiece.getType() : ""));
+        Bus bus = matchBus;
+        if (bus != null) bus.publish(GameSession.TOPIC_MOVE_RESOLVED, event);
+    }
+
+    @Override
+    public void onGameOver(GameOverEvent event) {
+        log.log("Game over, winner=" + event.winnerColor);
+        Bus bus = matchBus;
+        if (bus != null) bus.publish(GameSession.TOPIC_GAME_OVER, event);
+    }
+
+    @Override
+    public void onGameStarted(GameStartedEvent event) {
+        log.log("Game started.");
+        Bus bus = matchBus;
+        if (bus != null) bus.publish(GameSession.TOPIC_GAME_STARTED, event);
+    }
+
+    private static String square(Position pos) {
+        return "" + (char) ('a' + pos.getCol()) + pos.getRow();
     }
 }

@@ -9,4 +9,7 @@ public interface GameClientListener {
     default void onMatchFound(String color, String opponentUsername, int opponentElo) {}
     default void onNoMatch() {}
     default void onOpponentDisconnected(int secondsRemaining) {}
+    default void onMoveResolved(MoveEvent event) {}
+    default void onGameOver(GameOverEvent event) {}
+    default void onGameStarted(GameStartedEvent event) {}
 }

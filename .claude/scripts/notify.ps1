@@ -14,9 +14,22 @@ if (Test-Path $path) {
 
     Start-Sleep -Milliseconds 300
 
-    $player.Play()
+    $waited = 0
+    while (-not $player.NaturalDuration.HasTimeSpan -and $waited -lt 2000) {
+        Start-Sleep -Milliseconds 100
+        $waited += 100
+    }
+    if ($player.NaturalDuration.HasTimeSpan) {
+        $clipMs = [int]$player.NaturalDuration.TimeSpan.TotalMilliseconds
+    } else {
+        $clipMs = 1500
+    }
 
-    Start-Sleep -Seconds 5
+    for ($i = 0; $i -lt 3; $i++) {
+        $player.Position = [TimeSpan]::Zero
+        $player.Play()
+        Start-Sleep -Milliseconds ($clipMs + 200)
+    }
 
     $player.Stop()
     $player.Close()

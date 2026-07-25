@@ -84,8 +84,15 @@ public abstract class BoardWindow {
         infoRenderer.renderLeftPanel(boardHeight).drawOn(canvas, 0, topHeight);
         infoRenderer.renderRightPanel(boardHeight).drawOn(canvas, sideWidth + boardWidth, topHeight);
         boardRenderer.render(snapshot, boardWidth, boardHeight).drawOn(canvas, sideWidth, topHeight);
+        drawOverlay(canvas);
 
         displaySurface.setImage(canvas.get());
+    }
+
+    // No-op here: a hook for state BoardRenderer has no way to know about because
+    // it isn't part of GameSnapshot at all (e.g. NetworkGameWindow's opponent-
+    // disconnected countdown, which arrives as its own separate wire message).
+    protected void drawOverlay(Img canvas) {
     }
 
     protected void show() { frame.setVisible(true); }

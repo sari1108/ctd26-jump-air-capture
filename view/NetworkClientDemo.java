@@ -38,6 +38,7 @@ public class NetworkClientDemo implements GameClientListener {
     private volatile JLabel statusLabel;
     private volatile JButton playButton;
     private volatile JButton roomButton;
+    private volatile String activeRoomId;
     private final Object matchLock = new Object();
     private volatile boolean matchDecided = false;
 
@@ -207,6 +208,7 @@ public class NetworkClientDemo implements GameClientListener {
             String roomId = field.getText().trim();
             if (!roomId.isEmpty()) {
                 setBusy(true);
+                activeRoomId = roomId;
                 client.sendJoinRoom(roomId);
             }
             dialog.dispose();
@@ -260,6 +262,10 @@ public class NetworkClientDemo implements GameClientListener {
 
                 window = new NetworkGameWindow(currentClient, 8, 8, whiteName, blackName, scoreTracker, movesLog);
                 window.onNames(whiteName, blackName);
+                // Room ID stays visible in the window title for the whole game, not just
+                // while waiting - it's still "written on top of the screen" once playing.
+                String roomId = activeRoomId;
+                if (roomId != null) window.setTitle("Board (network) - Room " + roomId + " - you are " + color);
                 JOptionPane.showMessageDialog(null,
                         "Match found! You are " + color + ".\nOpponent: " + opponentUsername + " (ELO " + opponentElo + ")",
                         "Match Found", JOptionPane.INFORMATION_MESSAGE);
@@ -279,6 +285,7 @@ public class NetworkClientDemo implements GameClientListener {
     public void onRoomCreated(String roomId) {
         System.out.println("Room created! ID: " + roomId + " - share this with the other player, waiting for them to join...");
         log.log("Room created: " + roomId);
+        activeRoomId = roomId;
         setStatus("<b>Room code: " + roomId + "</b><br>Give this code to your friend. Waiting for them to join...");
         SwingUtilities.invokeLater(() -> {
             if (homeWindow != null) homeWindow.setTitle("KamaTech Chess - Room " + roomId + " (waiting for opponent)");

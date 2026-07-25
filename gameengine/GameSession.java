@@ -22,11 +22,11 @@ public class GameSession {
 
     private final ArrivalResolver arrivalResolver;
     private final SnapshotBuilder snapshotBuilder;
+    private final AnimationClock animationClock = new AnimationClock();
 
     private long currentTime = 0;
     private boolean isGameOver = false;
     private String winner = null;
-    private long gameOverAt = -1;
     private Position rejectedPosition = null;
     private long rejectedAt = -1;
 
@@ -44,6 +44,7 @@ public class GameSession {
                 promotionRule, winConditionRule, bus, TOPIC_MOVE_RESOLVED, TOPIC_GAME_OVER);
         this.snapshotBuilder = new SnapshotBuilder(board, validators, pendingMoves,
                 airborneRegistry, restingRegistry);
+        animationClock.subscribe(bus);
     }
 
     // Pixel-coordinate entry point (kept for the console protocol in Main.java and
@@ -125,7 +126,6 @@ public class GameSession {
             if (outcome.gameOver) {
                 isGameOver = true;
                 winner = outcome.winner;
-                gameOverAt = currentTime;
             }
         }
 
@@ -179,7 +179,6 @@ public class GameSession {
         if (isGameOver) return;
         isGameOver = true;
         winner = winnerColor;
-        gameOverAt = currentTime;
         bus.publish(TOPIC_GAME_OVER, new GameOverEvent(winner, currentTime));
     }
 
@@ -192,13 +191,17 @@ public class GameSession {
     }
 
     public GameSnapshot snapshot() {
-        return snapshotBuilder.build(selection, currentTime, isGameOver, winner, gameOverAt, rejectedPosition, rejectedAt);
+        return snapshotBuilder.build(selection, currentTime, isGameOver, winner,
+                animationClock.msSinceStart(currentTime), animationClock.msSinceGameOver(currentTime),
+                rejectedPosition, rejectedAt);
     }
 
     // Per-viewer snapshot: the board/pending-moves/airborne/game-over state is the
     // same for everyone, but the "selected" square and legal-move highlights are
     // this color's own - never the other seat's in-progress selection.
     public GameSnapshot snapshot(PieceColor viewerColor) {
-        return snapshotBuilder.build(selectionFor(viewerColor), currentTime, isGameOver, winner, gameOverAt, rejectedPosition, rejectedAt);
+        return snapshotBuilder.build(selectionFor(viewerColor), currentTime, isGameOver, winner,
+                animationClock.msSinceStart(currentTime), animationClock.msSinceGameOver(currentTime),
+                rejectedPosition, rejectedAt);
     }
 }

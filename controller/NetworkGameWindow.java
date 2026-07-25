@@ -1,3 +1,4 @@
+import java.awt.Color;
 import java.awt.event.MouseEvent;
 import javax.swing.SwingUtilities;
 
@@ -11,6 +12,7 @@ public class NetworkGameWindow extends BoardWindow {
     private final GameClient gameClient;
     private final boolean spectator;
     private volatile GameSnapshot latestSnapshot;
+    private volatile int disconnectSecondsRemaining = 0;
 
     public NetworkGameWindow(GameClient gameClient, int rows, int cols,
                               String whiteName, String blackName,
@@ -44,9 +46,25 @@ public class NetworkGameWindow extends BoardWindow {
     }
 
     public void onOpponentDisconnected(int secondsRemaining) {
-        SwingUtilities.invokeLater(() -> setTitle(secondsRemaining > 0
-                ? "Board (network) - opponent disconnected, auto-win in " + secondsRemaining + "s"
-                : "Board (network)"));
+        disconnectSecondsRemaining = secondsRemaining;
+        SwingUtilities.invokeLater(() -> {
+            setTitle(secondsRemaining > 0
+                    ? "Board (network) - opponent disconnected, auto-win in " + secondsRemaining + "s"
+                    : "Board (network)");
+            renderFrame(latestSnapshot); // redraw immediately - don't wait for the next server tick
+        });
+    }
+
+    // A red banner across the top of the whole window - the countdown shouldn't
+    // be something you only notice if you happen to glance at the title bar.
+    @Override
+    protected void drawOverlay(Img canvas) {
+        int seconds = disconnectSecondsRemaining;
+        if (seconds <= 0) return;
+
+        int barHeight = 40;
+        canvas.fillRect(0, 0, canvas.getWidth(), barHeight, new Color(200, 40, 40, 235));
+        canvas.putText("Opponent disconnected - auto-win in " + seconds + "s", 14, barHeight - 12, 1.3f, Color.WHITE, 1);
     }
 
     @Override

@@ -24,7 +24,12 @@ public class SnapshotBuilder {
     // selection is passed in rather than held as a field: local play always uses its
     // one shared selection, network play passes whichever color's own selection the
     // snapshot is being built for (see GameSession.snapshot(PieceColor)).
-    public GameSnapshot build(PieceSelection selection, long currentTime, boolean isGameOver, String winner, long gameOverAt,
+    //
+    // animationElapsedMillis/msSinceGameOver come from AnimationClock (a bus
+    // subscriber) rather than being computed here from the engine's raw clock -
+    // they're what the start/end fade animations are actually timed from.
+    public GameSnapshot build(PieceSelection selection, long currentTime, boolean isGameOver, String winner,
+                               long animationElapsedMillis, long msSinceGameOver,
                                Position rejectedPosition, long rejectedAt) {
         List<PieceSnapshot> pieces = new ArrayList<>();
 
@@ -71,9 +76,8 @@ public class SnapshotBuilder {
         Position rejected = (rejectedPosition != null && currentTime - rejectedAt <= GameConfig.REJECTED_MOVE_FLASH_MS)
                 ? rejectedPosition : null;
         List<Position> legalMoves = legalDestinationsFromSelection(selection);
-        long msSinceGameOver = (isGameOver && gameOverAt >= 0) ? currentTime - gameOverAt : 0;
         return new GameSnapshot(board.getRows(), board.getCols(), pieces, selected, rejected, legalMoves,
-                isGameOver, winner, currentTime, msSinceGameOver);
+                isGameOver, winner, animationElapsedMillis, msSinceGameOver);
     }
 
     // Every square the currently-selected piece could legally move to right now -

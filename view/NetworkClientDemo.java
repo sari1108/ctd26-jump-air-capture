@@ -39,6 +39,7 @@ public class NetworkClientDemo implements GameClientListener {
     private volatile JButton playButton;
     private volatile JButton roomButton;
     private volatile String activeRoomId;
+    private volatile String myUsername;
     private final Object matchLock = new Object();
     private volatile boolean matchDecided = false;
 
@@ -75,6 +76,7 @@ public class NetworkClientDemo implements GameClientListener {
             try {
                 client = new GameClient(host, port, username, password, log, this);
                 currentClient = client;
+                myUsername = username;
                 System.out.println("Welcome, " + username + " (elo " + client.getElo() + ").");
             } catch (Exception e) {
                 System.out.println("Login failed: " + e.getMessage() + " - try again.");
@@ -243,8 +245,10 @@ public class NetworkClientDemo implements GameClientListener {
     public void onMatchFound(String color, String opponentUsername, int opponentElo) {
         System.out.println("Match found! You are " + color + ", opponent: " + opponentUsername + " (elo " + opponentElo + ")");
         log.log("Match found: you=" + color + " opponent=" + opponentUsername + " (elo " + opponentElo + ")");
-        String whiteName = "WHITE".equals(color) ? "You" : opponentUsername;
-        String blackName = "BLACK".equals(color) ? "You" : opponentUsername;
+        // Real usernames on both sides - not a generic "You", which looked identical
+        // in both players' own windows and made it unclear whose window was whose.
+        String whiteName = "WHITE".equals(color) ? myUsername : opponentUsername;
+        String blackName = "BLACK".equals(color) ? myUsername : opponentUsername;
 
         try {
             SwingUtilities.invokeAndWait(() -> {

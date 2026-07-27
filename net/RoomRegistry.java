@@ -9,6 +9,12 @@ import java.util.function.Supplier;
 // creates a room and gets back a short shareable code; whoever next joins with that
 // code becomes their opponent (Black) and the match starts; anyone who joins after
 // that is attached as a read-only spectator to the Match already in progress.
+//
+// `rooms` (the live connections/Match objects) always stays local - it can't be
+// anything else, the same reason MatchmakingServer's connections can't move to Redis.
+// When a RedisClient is supplied, room *state* (does this code exist, is it still
+// waiting or already started) is additionally mirrored into Redis, so - same as the
+// matchmaking queue - it's inspectable as real shared state, not just process memory.
 final class RoomRegistry {
     // No 0/O/1/I - avoids codes that are ambiguous to read aloud or type.
     private static final String CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
@@ -17,13 +23,32 @@ final class RoomRegistry {
     private final UserDatabase userDatabase;
     private final ActivityLog log;
     private final Supplier<GameSession> sessionFactory;
+    private final RedisClient redis;
     private final Map<String, Room> rooms = new ConcurrentHashMap<>();
     private final SecureRandom random = new SecureRandom();
 
     RoomRegistry(UserDatabase userDatabase, ActivityLog log, Supplier<GameSession> sessionFactory) {
+        this(userDatabase, log, sessionFactory, null);
+    }
+
+    RoomRegistry(UserDatabase userDatabase, ActivityLog log, Supplier<GameSession> sessionFactory, RedisClient redis) {
         this.userDatabase = userDatabase;
         this.log = log;
         this.sessionFactory = sessionFactory;
+        this.redis = redis;
+    }
+
+    private static String redisRoomKey(String code) {
+        return "room:" + code;
+    }
+
+    private void mirrorToRedis(String code, String field, String value) {
+        if (redis == null) return;
+        try {
+            redis.hset(redisRoomKey(code), field, value);
+        } catch (IOException e) {
+            log.log("Redis error updating room " + code + ": " + e.getMessage());
+        }
     }
 
     // Blocks the creator's thread until a second player joins and the match starts -
@@ -32,6 +57,9 @@ final class RoomRegistry {
         String code = newUniqueCode();
         Room room = new Room(connection, username, elo);
         rooms.put(code, room);
+        mirrorToRedis(code, "creatorUsername", username);
+        mirrorToRedis(code, "creatorElo", String.valueOf(elo));
+        mirrorToRedis(code, "state", "waiting");
         log.log(username + " created room " + code);
         sendSafely(connection, "ROOM_CREATED " + code);
         try {
@@ -63,6 +91,7 @@ final class RoomRegistry {
                 Match match = new Match(sessionFactory.get(), userDatabase, log, white, black);
                 room.match = match;
                 match.start();
+                mirrorToRedis(code, "state", "started");
                 log.log("Room " + code + " match started: " + room.creatorUsername + " (white) vs " + username + " (black)");
                 room.matchStarted.countDown();
             } else {
@@ -73,6 +102,10 @@ final class RoomRegistry {
             }
             return true;
         }
+    }
+
+    int roomCount() {
+        return rooms.size();
     }
 
     private String newUniqueCode() {

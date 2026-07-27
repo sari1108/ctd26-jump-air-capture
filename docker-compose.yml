@@ -13,14 +13,26 @@ services:
       timeout: 5s
       retries: 10
 
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   game-server:
     build: .
     ports:
       - "5000:5000"
+      - "8080:8080"
     environment:
       DB_URL: jdbc:postgresql://postgres:5432/chessgame?user=chessgame&password=chessgame
+      REDIS_URL: redis:6379
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: unless-stopped
 

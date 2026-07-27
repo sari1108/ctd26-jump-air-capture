@@ -12,9 +12,12 @@ RUN rm -rf out && mkdir out \
     && javac -cp "lib/*" -d out @/tmp/sources.txt
 
 EXPOSE 5000
+EXPOSE 8080
 VOLUME ["/data"]
 
 # DB_URL, when set (docker-compose sets it to the postgres container), switches
 # UserDatabase over to PostgreSQL. Unset, it falls back to a SQLite file on the
 # mounted /data volume - so `docker run` without compose still works standalone.
+# REDIS_URL ("host:port"), when set, moves the matchmaking queue/room registry onto
+# Redis (RedisClient is hand-rolled, no extra jar needed on the classpath for it).
 ENTRYPOINT ["/bin/sh", "-c", "java -cp \"out:lib/slf4j-api.jar:lib/slf4j-nop.jar:lib/sqlite-jdbc.jar:lib/postgresql.jar\" ServerMain 5000 \"${DB_URL:-/data/users.db}\""]

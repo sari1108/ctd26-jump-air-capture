@@ -1,0 +1,39 @@
+# Same role as docker-compose.yml's redis service - matchmaking queue + room state.
+# No PVC on purpose: this Redis holds only ephemeral coordination data (see
+# Server_Design.md Q2/Q3), losing it just means an in-flight queue/room resets, which
+# is cheap - consistent with the doc's "losing an in-progress match is acceptable" call.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: redis
+  namespace: chess-game
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: redis }
+  template:
+    metadata:
+      labels: { app: redis }
+    spec:
+      containers:
+        - name: redis
+          image: redis:7-alpine
+          ports:
+            - containerPort: 6379
+          readinessProbe:
+            exec: { command: ["redis-cli", "ping"] }
+            periodSeconds: 5
+          livenessProbe:
+            exec: { command: ["redis-cli", "ping"] }
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: redis
+  namespace: chess-game
+spec:
+  selector: { app: redis }
+  ports:
+    - port: 6379
+      targetPort: 6379

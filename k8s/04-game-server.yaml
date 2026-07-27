@@ -1,0 +1,99 @@
+# Deploys today's single image (the same one Dockerfile/docker-compose.yml build) -
+# this is NOT the four-service split from Server_Design.md Q2/Q4 yet, it's the same
+# "small, working" monolith, just running under Kubernetes instead of Compose. That
+# split is still future work; this manifest is honest about running what exists today.
+#
+# `image: chess-game-server:local` assumes the image was built and made available to
+# the cluster already (for k3d: `k3d image import chess-game-server:local -c <cluster>`;
+# for a real cluster: push to a registry and reference it here instead).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: game-server
+  namespace: chess-game
+spec:
+  replicas: 1 # >1 is exactly what Q2 says still needs the Redis-backed queue/room
+              # registry finished into the actual matching *decision* (not just mirrored
+              # data) before it's safe to scale out - see Server_Design.md.
+  selector:
+    matchLabels: { app: game-server }
+  template:
+    metadata:
+      labels: { app: game-server }
+    spec:
+      containers:
+        - name: game-server
+          image: chess-game-server:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: game
+              containerPort: 5000
+            - name: health
+              containerPort: 8080
+          env:
+            - name: DB_URL
+              value: "jdbc:postgresql://postgres:5432/chessgame?user=chessgame&password=chessgame"
+            - name: REDIS_URL
+              value: "redis:6379"
+          readinessProbe:
+            httpGet: { path: /healthz, port: health }
+            periodSeconds: 5
+            failureThreshold: 2
+          livenessProbe:
+            httpGet: { path: /healthz, port: health }
+            periodSeconds: 10
+            failureThreshold: 3
+          # Graceful drain per Server_Design.md Q4 (matches run 30-90s): give an
+          # in-progress match time to finish instead of killing it mid-game. NOTE, said
+          # plainly rather than glossed over: this wires the K8s-side primitives only -
+          # readinessProbe flipping false stops NEW traffic from being routed here, but
+          # ServerMain doesn't yet listen for a shutdown signal to itself stop accepting
+          # new matches. That app-level hook is the next piece of real work, not done here.
+          lifecycle:
+            preStop:
+              exec: { command: ["sleep", "5"] }
+          resources:
+            requests: { cpu: "250m", memory: "256Mi" }
+            limits: { cpu: "1", memory: "512Mi" }
+      terminationGracePeriodSeconds: 120 # bounded by the ~90s average match length
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: game-server
+  namespace: chess-game
+spec:
+  selector: { app: game-server }
+  type: LoadBalancer # a real cluster would front this with an Ingress/gateway for TLS;
+                      # LoadBalancer is the simplest thing that exposes a raw TCP
+                      # WebSocket port, which is what a k3d/local cluster can satisfy
+  ports:
+    - name: game
+      port: 5000
+      targetPort: 5000
+    - name: health
+      port: 8080
+      targetPort: 8080
+---
+# CPU-based autoscaling only, and said plainly: Server_Design.md Q4 calls for scaling
+# on *active match count* instead, since compute cost tracks concurrent matches, not
+# raw CPU alone - that needs a custom metrics adapter (e.g. exposing matches_started
+# style data to Prometheus + the Prometheus Adapter) that doesn't exist yet. CPU-based
+# HPA is the honest, buildable-today version of the same idea.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: game-server
+  namespace: chess-game
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: game-server
+  minReplicas: 1
+  maxReplicas: 5
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target: { type: Utilization, averageUtilization: 70 }

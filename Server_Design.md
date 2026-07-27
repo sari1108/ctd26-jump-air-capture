@@ -32,7 +32,7 @@ here's how those map onto what's below, and what's genuinely new:
 | **API Gateway** (login, rooms, history — non-realtime) | "Auth service" in Q2 | Already designed |
 | **WebSocket Gateway** (live connections, state updates) | "Gateway/router" role in Q4's four-roles list | Already designed |
 | **Matchmaker** (pairs players) | "Matchmaking/Room service" in Q2 | Already designed |
-| **Game Allocator** (picks *which* Game Server shard runs a room) | Folded into "Matchmaking/Room service" in Q2 | The course splits this out as its own step — worth doing: picking *which* game-hosting instance is a distinct decision (load-based placement) from *pairing* two players, even if one service does both today in this doc |
+| **Game Allocator** (picks *which* Game Server shard runs a room) | `net/GameAllocator.java` | ✅ **Done as a real code seam.** `MatchmakingServer` and `RoomRegistry` no longer construct a `Match` directly — both go through `GameAllocator.allocate(...)`, which today always means "start it right here" (there's exactly one shard), but is a genuine, separate class with its own single job, matching the diagram's separation from the Matchmaker. The day this process becomes one of several game-hosting instances, `allocate()` is the one method that changes — pick a least-loaded remote shard, tell it to host the match, hand both clients that shard's address — without `MatchmakingServer` or `RoomRegistry` changing at all |
 | **Game Server Shards** (run the actual games, authoritative) | "Game-hosting service" in Q2/Q4 | Already designed — and already true in the current code: `GameSession` is the only thing that mutates board state; neither `NetworkGameWindow` (client) nor the WebSocket layer ever apply a move themselves, they only forward intent and render whatever the server/GameSession decided |
 | **Observability** (logs, metrics, health checks, load tests) | Not previously covered | **New.** See below. |
 
@@ -451,3 +451,39 @@ this close to done — noted as a real, specific remaining gap, not silently dro
 - `recordGame` was tested standalone against both a real Postgres container and a
   throwaway SQLite file: two games inserted, read back via a direct `SELECT ... ORDER BY
   ended_at`, correct rows in the correct order on both backends.
+
+---
+
+## What's still genuinely not done, and why — checked concretely, not estimated
+
+Two items from the course's diagram remain unimplemented on purpose: the WS Gateway's
+"async I/O, no thread per client," and a true process-level split into separate
+Auth/Matchmaking/Game-hosting services. Both were re-examined specifically to answer
+"why not just do it now" with facts instead of general caution:
+
+**Async I/O is not a socket-layer swap — it's a rewrite of every blocking wait in the
+server.** Grepping the codebase for `receiveText()` (the blocking "wait for the next
+message" call) and `CountDownLatch.await()` (the blocking "wait to be matched/room to
+start" call) turns up **seven** call sites: login, the lobby loop, both of `Match`'s
+per-seat reader threads, `RoomRegistry.create`'s wait, and `MatchmakingServer`'s queue
+wait. `WebSocketFrame`/`WebSocketHandshake` (the actual RFC 6455 encode/decode logic)
+don't need to change at all — framing is independent of blocking vs. non-blocking I/O.
+What *would* need to change is every one of those seven sequential, easy-to-read blocking
+waits, rewritten as callback/continuation-driven state instead — the entire control flow
+of `MatchmakingServer`, `RoomRegistry`, and `Match`, not an isolated layer underneath
+them. That's real open-heart surgery on the one thing that's tested and working with real
+players; it's still the right call to leave it for a dedicated pass with real time to
+verify each of those seven sites individually, not squeezed in alongside everything else
+here.
+
+**A true process-level service split needs a client-visible protocol change, not just a
+server-side one.** Today `MATCH_FOUND` carries no address, because the client is already
+talking to the one process running the match. A real split means the Matchmaking/Game
+Allocator process telling the client *which game-hosting instance's address* to open a
+new connection to — a wire-protocol addition on both `GameClient` and the server side,
+not a server-internal refactor. `GameAllocator` (just added, see the table above) is the
+safe, real first step toward this: the *seam* now exists in code, cleanly separated from
+matchmaking and from room management, with a single method that would change. Finishing
+the split — actually running a second game-hosting process and teaching the client to
+connect to it — is the next milestone once there's time to test that reconnection flow
+properly, not a same-session change to the thing people are actively test-playing on.

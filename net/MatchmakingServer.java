@@ -38,6 +38,7 @@ public class MatchmakingServer {
     private final ActivityLog log;
     private final Supplier<GameSession> sessionFactory;
     private final RoomRegistry roomRegistry;
+    private final GameAllocator gameAllocator;
     private final RedisClient redis;
     private final List<QueueEntry> queue = new ArrayList<>();
     private final Object queueLock = new Object();
@@ -70,7 +71,8 @@ public class MatchmakingServer {
         this.log = log;
         this.sessionFactory = sessionFactory;
         this.redis = redis;
-        this.roomRegistry = new RoomRegistry(userDatabase, log, sessionFactory, redis);
+        this.gameAllocator = new GameAllocator(userDatabase, log);
+        this.roomRegistry = new RoomRegistry(userDatabase, log, sessionFactory, redis, gameAllocator);
     }
 
     public void start() throws IOException {
@@ -335,8 +337,7 @@ public class MatchmakingServer {
         sendSafely(a.connection, "MATCH_FOUND WHITE " + b.username + " " + b.elo);
         sendSafely(b.connection, "MATCH_FOUND BLACK " + a.username + " " + a.elo);
 
-        Match match = new Match(sessionFactory.get(), userDatabase, log, white, black);
-        match.start();
+        gameAllocator.allocate(sessionFactory, white, black);
         matchesStarted.incrementAndGet();
         log.log("Match started: " + a.username + " (white, elo " + a.elo + ") vs "
                 + b.username + " (black, elo " + b.elo + ")");

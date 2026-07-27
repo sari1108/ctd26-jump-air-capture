@@ -20,22 +20,28 @@ final class RoomRegistry {
     private static final String CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     private static final int CODE_LENGTH = 6;
 
-    private final UserDatabase userDatabase;
     private final ActivityLog log;
     private final Supplier<GameSession> sessionFactory;
     private final RedisClient redis;
+    private final GameAllocator gameAllocator;
     private final Map<String, Room> rooms = new ConcurrentHashMap<>();
     private final SecureRandom random = new SecureRandom();
 
     RoomRegistry(UserDatabase userDatabase, ActivityLog log, Supplier<GameSession> sessionFactory) {
-        this(userDatabase, log, sessionFactory, null);
+        this(log, sessionFactory, null, new GameAllocator(userDatabase, log));
     }
 
-    RoomRegistry(UserDatabase userDatabase, ActivityLog log, Supplier<GameSession> sessionFactory, RedisClient redis) {
-        this.userDatabase = userDatabase;
+    RoomRegistry(UserDatabase userDatabase, ActivityLog log, Supplier<GameSession> sessionFactory,
+                 RedisClient redis, GameAllocator gameAllocator) {
+        this(log, sessionFactory, redis, gameAllocator);
+    }
+
+    private RoomRegistry(ActivityLog log, Supplier<GameSession> sessionFactory,
+                          RedisClient redis, GameAllocator gameAllocator) {
         this.log = log;
         this.sessionFactory = sessionFactory;
         this.redis = redis;
+        this.gameAllocator = gameAllocator;
     }
 
     private static String redisRoomKey(String code) {
@@ -88,9 +94,7 @@ final class RoomRegistry {
                 sendSafely(room.creatorConnection, "MATCH_FOUND WHITE " + username + " " + elo);
                 sendSafely(connection, "MATCH_FOUND BLACK " + room.creatorUsername + " " + room.creatorElo);
 
-                Match match = new Match(sessionFactory.get(), userDatabase, log, white, black);
-                room.match = match;
-                match.start();
+                room.match = gameAllocator.allocate(sessionFactory, white, black);
                 mirrorToRedis(code, "state", "started");
                 log.log("Room " + code + " match started: " + room.creatorUsername + " (white) vs " + username + " (black)");
                 room.matchStarted.countDown();

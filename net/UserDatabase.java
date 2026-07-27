@@ -59,6 +59,36 @@ public class UserDatabase implements AutoCloseable {
         } catch (SQLException alreadyExists) {
             // column already present (fresh DB, or migration already ran) - nothing to do
         }
+
+        // "games" answers the course diagram's "PostgreSQL stores ... games, results" -
+        // one row per finished match (Match.onGameOver), not per move: a match produces
+        // exactly one game-over event, so this is the same low-frequency write pattern
+        // as the ELO update right next to it. No primary key by design (an insert-only
+        // log, nothing ever updates a row) - keeps the schema identical, portable SQL
+        // across SQLite and Postgres with no DB-specific autoincrement syntax needed.
+        try (PreparedStatement create = connection.prepareStatement(
+                "CREATE TABLE IF NOT EXISTS games (" +
+                        "white_username TEXT NOT NULL," +
+                        "black_username TEXT NOT NULL," +
+                        "winner_color TEXT NOT NULL," +
+                        "ended_at BIGINT NOT NULL)")) {
+            create.execute();
+        }
+    }
+
+    // Full per-move history (every move, not just the final result) is deliberately not
+    // persisted here - that would mean a DB write on every single move of a live match,
+    // touching the hot gameplay path this close to the deadline. Recorded once, at
+    // game-over, same as the ELO update beside it in Match.onGameOver.
+    public synchronized void recordGame(String whiteUsername, String blackUsername, String winnerColor, long endedAt) throws SQLException {
+        try (PreparedStatement insert = connection.prepareStatement(
+                "INSERT INTO games (white_username, black_username, winner_color, ended_at) VALUES (?, ?, ?, ?)")) {
+            insert.setString(1, whiteUsername);
+            insert.setString(2, blackUsername);
+            insert.setString(3, winnerColor);
+            insert.setLong(4, endedAt);
+            insert.executeUpdate();
+        }
     }
 
     public enum LoginResult { CREATED, OK, WRONG_PASSWORD }

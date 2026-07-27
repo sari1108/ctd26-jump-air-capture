@@ -407,6 +407,15 @@ primitives are wired, but `ServerMain` doesn't yet listen for a shutdown signal 
 *accepting new* matches during drain — that app-level hook is real remaining work, not
 glossed over as done.
 
+**4. `games` table in Postgres/SQLite.** The diagram lists "games, results, move history"
+under PostgreSQL's job; only `users`/ELO was actually persisted before this. `Match.
+onGameOver()` now also calls `userDatabase.recordGame(white, black, winnerColor, endedAt)`
+right next to the existing ELO update — one `INSERT` per finished match, the same
+low-frequency write pattern Q1 already argued a match produces. Full per-move history
+(every individual move, not just the final result) is deliberately **not** persisted:
+that would mean a DB write on every move of a live match, touching the hot gameplay path
+this close to done — noted as a real, specific remaining gap, not silently dropped.
+
 **Verified, not just written:**
 - `net/RedisClient.java` tested standalone against a real `redis:7-alpine` container:
   hash/set operations round-tripped correctly, including a Hebrew username (this
@@ -439,3 +448,6 @@ glossed over as done.
   all-green `kubectl get pods` was not reached in this pass; what *was* reached is
   stronger evidence than an untested YAML file - a real API server accepted the
   manifests and the app container proved it wires up correctly against them.
+- `recordGame` was tested standalone against both a real Postgres container and a
+  throwaway SQLite file: two games inserted, read back via a direct `SELECT ... ORDER BY
+  ended_at`, correct rows in the correct order on both backends.

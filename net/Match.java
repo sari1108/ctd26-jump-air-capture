@@ -147,12 +147,13 @@ public class Match {
 
             userDatabase.updateElo(white.username, newWhiteElo);
             userDatabase.updateElo(black.username, newBlackElo);
+            userDatabase.recordGame(white.username, black.username, event.winnerColor, System.currentTimeMillis());
 
             log.log("Match over, winner=" + event.winnerColor
                     + ". ELO: " + white.username + " " + whiteElo + "->" + newWhiteElo
                     + ", " + black.username + " " + blackElo + "->" + newBlackElo);
         } catch (SQLException e) {
-            log.log("Failed to update ELO: " + e.getMessage());
+            log.log("Failed to update ELO or record game: " + e.getMessage());
         }
     }
 

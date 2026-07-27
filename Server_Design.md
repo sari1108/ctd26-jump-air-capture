@@ -258,7 +258,7 @@ Short-lived matches change the shape of the game-hosting fleet specifically:
 
 | Today | At scale |
 |---|---|
-| `UserDatabase` → SQLite file | Postgres/MySQL client, connection-pooled |
+| `UserDatabase` → SQLite file | ✅ **Done** — Postgres via JDBC, selected by `DB_URL` (see "What we shipped today"); connection pooling across many stateless replicas is the one piece still ahead |
 | `MatchmakingServer.queue` (local `List`) | Redis-backed shared queue |
 | `RoomRegistry.rooms` (local `ConcurrentHashMap`) | Redis-backed shared map (`roomId -> instance`) |
 | One process = auth + matchmaking + game hosting | Four separate services/images |
@@ -279,29 +279,52 @@ Per the instructions — "prefer something small that works over trying to build
 everything and having it not work" — today's deliverable is deliberately *not* a rewrite
 into the six-component design above. It's the current, already-working monolithic server
 (`ServerMain` → `MatchmakingServer`), containerized and proven to actually run and accept
-connections through Docker:
+connections through Docker, **now backed by real PostgreSQL instead of SQLite**:
 
 - **`Dockerfile`** — compiles the existing source tree exactly the way `compile.bat`
-  already does (one `javac` pass, `lib/*.jar` on the classpath), then runs
-  `ServerMain 5000 /data/users.db`. No code changes; behavior is identical to running it
-  natively.
-- **`docker-compose.yml`** — builds that image, publishes port 5000, and mounts a named
-  volume at `/data` so `users.db` (accounts + ELO) survives container restarts instead of
-  resetting every time.
+  already does (one `javac` pass, `lib/*.jar` on the classpath). The entrypoint reads a
+  `DB_URL` environment variable: if it's a `jdbc:postgresql:...` URL, the server talks to
+  Postgres; if unset, it falls back to a SQLite file on a mounted volume (so the image
+  still works standalone with `docker run`, no compose/Postgres required).
+- **`docker-compose.yml`** — now defines **two** services: `postgres` (official
+  `postgres:16-alpine` image, with a health check so `game-server` waits for it to be
+  actually ready, not just started) and `game-server` (built from the `Dockerfile`,
+  `DB_URL` pointed at the `postgres` service by its Compose network name).
+- **`net/UserDatabase.java`** — updated to answer Q1 with running code, not just
+  prose. The constructor now detects whether it was given a plain file path (SQLite) or a
+  `jdbc:postgresql:` URL (Postgres) and loads the matching JDBC driver
+  (`lib/postgresql.jar`, added alongside `lib/sqlite-jdbc.jar`). The schema and every
+  query were already portable standard SQL (`TEXT`/`INTEGER` columns, no SQLite-specific
+  syntax) — so this was a real driver/connection-string switch, not a rewrite, and the
+  **local/native SQLite path (`2-Start-Server.bat`) is completely unchanged and still
+  works exactly as before.**
 - **`.dockerignore`** — keeps `upload/`, `out/`, logs, and the native `users.db` out of
-  the build context, so the container always compiles fresh instead of reusing stale
-  local build artifacts.
+  the build context.
 
-Verified today, not just written: `docker compose build` compiles cleanly, the container
-boots and logs `MatchmakingServer listening on port 5000`, and a raw TCP connection from
-the host through the published port succeeds.
+**Verified today, not just written:**
+- `docker compose build` compiles cleanly inside the container.
+- The `postgres` container reports healthy, and `game-server` waits for that before
+  starting (`depends_on: condition: service_healthy`).
+- With `game-server` pointed at the real Postgres container, `psql` confirms the `users`
+  table was created there with the correct schema.
+- A live `UserDatabase` round-trip against that same Postgres instance — register, login
+  with the correct password, login with the wrong password, read ELO, update ELO, read it
+  back — produced the correct result at every step, and `SELECT * FROM users` afterward
+  showed the row with the updated ELO, actually persisted in Postgres.
+- Separately, the **native SQLite path was re-verified unaffected**: the whole project
+  still compiles with `javac -cp 'lib\*'` (now including `postgresql.jar` on the
+  classpath with zero conflicts), and the same register/login/ELO round-trip against a
+  throwaway SQLite file produced identical results.
 
-**To run it:** `docker compose up --build` from the project root, then connect a client
-(`3-Play-Online.bat`) to `localhost:5000` exactly as with the native server.
+**To run it:** `docker compose up --build` from the project root (this now also starts a
+real Postgres, no separate setup needed), then connect a client (`3-Play-Online.bat`) to
+`localhost:5000` exactly as with the native server.
 
 **Deliberately not done today** (next step, not an oversight): splitting this one
-container into the four-to-six services from the table above, and standing up Postgres +
-Redis alongside it. That's a real rewrite — new inter-service protocol, a Postgres schema
-migrated off `UserDatabase`'s SQLite calls, a Redis-backed matchmaking queue replacing the
-in-memory `List` — and doing it without breaking the one thing that currently works isn't
-a same-day change. It's the natural next milestone once this base image is trusted.
+container into the four-to-six *services* from the table above (separate Auth /
+Matchmaking / Game-hosting processes), and moving the matchmaking queue + room registry
+off local Java memory and onto Redis. Today's change closes the Q1 gap (SQLite → a real
+client-server DB); Q2's gap (one process, one instance) is still open — that's the next
+milestone, and it's a bigger one: a new inter-service protocol, a Redis-backed queue
+replacing the in-memory `List`, and doing it without breaking the one thing that
+currently works isn't a same-day change.

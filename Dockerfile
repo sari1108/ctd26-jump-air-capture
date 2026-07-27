@@ -14,5 +14,7 @@ RUN rm -rf out && mkdir out \
 EXPOSE 5000
 VOLUME ["/data"]
 
-# users.db lives on the mounted /data volume so accounts/ELO survive restarts.
-ENTRYPOINT ["java", "-cp", "out:lib/slf4j-api.jar:lib/slf4j-nop.jar:lib/sqlite-jdbc.jar", "ServerMain", "5000", "/data/users.db"]
+# DB_URL, when set (docker-compose sets it to the postgres container), switches
+# UserDatabase over to PostgreSQL. Unset, it falls back to a SQLite file on the
+# mounted /data volume - so `docker run` without compose still works standalone.
+ENTRYPOINT ["/bin/sh", "-c", "java -cp \"out:lib/slf4j-api.jar:lib/slf4j-nop.jar:lib/sqlite-jdbc.jar:lib/postgresql.jar\" ServerMain 5000 \"${DB_URL:-/data/users.db}\""]

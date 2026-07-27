@@ -1,11 +1,28 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: chessgame
+      POSTGRES_USER: chessgame
+      POSTGRES_PASSWORD: chessgame
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U chessgame"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   game-server:
     build: .
     ports:
       - "5000:5000"
-    volumes:
-      - server-data:/data
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/chessgame?user=chessgame&password=chessgame
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
-  server-data:
+  postgres-data:

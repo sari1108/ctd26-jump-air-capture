@@ -9,8 +9,11 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.util.Base64;
 
-// Server-side user store: username + password + ELO, persisted in SQLite
-// (per the course's "save at SQLite db on server side" requirement).
+// Server-side user store: username + password + ELO. Runs on SQLite for local/native
+// runs (a single embedded file - see Server_Design.md Q1 for why that's fine at this
+// scale) or on PostgreSQL when given a "jdbc:postgresql:..." URL, which is what the
+// Docker Compose stack uses - same schema, same queries, just a real client-server DB
+// behind it so more than one server instance can safely share it.
 // Passwords are salted-hashed with repeated SHA-256 rounds - never stored
 // or compared in plain text. First login for a new username registers it;
 // a known username must match its stored password.
@@ -25,13 +28,18 @@ public class UserDatabase implements AutoCloseable {
 
     private final Connection connection;
 
-    public UserDatabase(String dbFilePath) throws SQLException {
+    // dbLocation is either a plain file path (e.g. "users.db", SQLite) or a full
+    // "jdbc:postgresql://host:port/dbname?user=...&password=..." URL.
+    public UserDatabase(String dbLocation) throws SQLException {
+        boolean postgres = dbLocation.startsWith("jdbc:postgresql:");
+        String driverClass = postgres ? "org.postgresql.Driver" : "org.sqlite.JDBC";
+        String expectedJar = postgres ? "lib/postgresql.jar" : "lib/sqlite-jdbc.jar";
         try {
-            Class.forName("org.sqlite.JDBC");
+            Class.forName(driverClass);
         } catch (ClassNotFoundException e) {
-            throw new IllegalStateException("sqlite-jdbc driver not on classpath (expected lib/sqlite-jdbc.jar)", e);
+            throw new IllegalStateException(driverClass + " driver not on classpath (expected " + expectedJar + ")", e);
         }
-        connection = DriverManager.getConnection("jdbc:sqlite:" + dbFilePath);
+        connection = DriverManager.getConnection(postgres ? dbLocation : "jdbc:sqlite:" + dbLocation);
         try (PreparedStatement create = connection.prepareStatement(
                 "CREATE TABLE IF NOT EXISTS users (" +
                         "username TEXT PRIMARY KEY," +

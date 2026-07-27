@@ -42,7 +42,7 @@ public class ServerMain {
                 () -> new GameSession(new BoardParser().parse(STARTING_POSITION)), redis);
         server.start();
 
-        HealthServer health = new HealthServer(8080, server);
+        HealthServer health = new HealthServer(8080, server, userDatabase);
         health.start();
         log.log("Health/metrics endpoint on port 8080 (/healthz, /metrics).");
 

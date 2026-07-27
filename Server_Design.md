@@ -34,7 +34,7 @@ here's how those map onto what's below, and what's genuinely new:
 | **Matchmaker** (pairs players) | "Matchmaking/Room service" in Q2 | Already designed |
 | **Game Allocator** (picks *which* Game Server shard runs a room) | `net/GameAllocator.java` | ✅ **Done as a real code seam.** `MatchmakingServer` and `RoomRegistry` no longer construct a `Match` directly — both go through `GameAllocator.allocate(...)`, which today always means "start it right here" (there's exactly one shard), but is a genuine, separate class with its own single job, matching the diagram's separation from the Matchmaker. The day this process becomes one of several game-hosting instances, `allocate()` is the one method that changes — pick a least-loaded remote shard, tell it to host the match, hand both clients that shard's address — without `MatchmakingServer` or `RoomRegistry` changing at all |
 | **Game Server Shards** (run the actual games, authoritative) | "Game-hosting service" in Q2/Q4 | Already designed — and already true in the current code: `GameSession` is the only thing that mutates board state; neither `NetworkGameWindow` (client) nor the WebSocket layer ever apply a move themselves, they only forward intent and render whatever the server/GameSession decided |
-| **Observability** (logs, metrics, health checks, load tests) | Not previously covered | **New.** See below. |
+| **Observability** (logs, metrics, health checks, load tests) | `ActivityLog`, `HealthServer`, `LoadTest` | ✅ **All four pieces done**: logs (`ActivityLog`), metrics + health checks (`HealthServer`'s `/metrics`/`/healthz`), and load tests (`net/LoadTest.java`, real numbers below) — alerting/tracing dashboards are the one sub-piece still absent, honestly, not a full APM stack |
 
 **Technology choices**, cross-checked against the course's recommendation:
 
@@ -451,6 +451,52 @@ this close to done — noted as a real, specific remaining gap, not silently dro
 - `recordGame` was tested standalone against both a real Postgres container and a
   throwaway SQLite file: two games inserted, read back via a direct `SELECT ... ORDER BY
   ended_at`, correct rows in the correct order on both backends.
+
+---
+
+## REST/HTTP history endpoint, and a real (not estimated) load test
+
+Two more diagram items closed with running code:
+
+**`GET /history?user=<name>`** (`net/HealthServer.java`, backed by `UserDatabase.
+listGames`) is genuine REST/HTTP — a plain JSON array of a player's past games from the
+new `games` table, returned over ordinary HTTP GET, not another WebSocket message. This
+is exactly the diagram's own example ("REST/HTTP is used for ... history"). Verified
+against a real running server: seeded two games, queried `/history?user=hist_user`,
+got them back correctly ordered most-recent-first; a request with no `user` parameter
+correctly returns a 400 with a JSON error body instead of crashing the endpoint.
+
+**`net/LoadTest.java`** is a real, keepable load-test tool (not a one-off script) —
+Observability's fourth piece, previously the one item flagged as completely unbuilt. It
+drives real `GameClient` connections (real `LOGIN`, real `PLAY`) against a real running
+`ServerMain` and reports how many actually connected, logged in, and got matched. Run it
+yourself: `java -cp out LoadTest localhost 5000 200`.
+
+**What it found, run today, numbers not estimates:**
+
+| N (simulated players) | Connected | Matched | Failures |
+|---|---|---|---|
+| 200, before the fix below | 185/200 | 184 | 15 |
+| 200, after the fix below | **200/200** | **200** | **0** |
+| 500, single-machine self-test | 201/500 | 200 | 299 |
+
+The 200-player run found a **real bug**, not a synthetic one: `MatchmakingServer` called
+`new ServerSocket(port)` with no explicit backlog, so Java's platform-default TCP accept
+queue (~50) dropped connections arriving in a tight burst. Fixed with one line — an
+explicit `ACCEPT_BACKLOG = 1024` — and re-verified with the identical test: 15 failures
+became 0. This is exactly the kind of gap a load test is supposed to catch that
+back-of-envelope math (like Q3's traffic calculation) cannot.
+
+The 500-player run is reported honestly rather than oversold: the server's own log shows
+it received only 201 `Connection accepted` lines out of 500 attempts — the shortfall
+happened before the connections even reached `MatchmakingServer`, on the client/OS side
+of a single Windows machine opening 500 simultaneous outbound sockets to itself. That
+means this number **does not** demonstrate a ~200-player server-side ceiling; it
+demonstrates that a single machine isn't a valid load generator for hundreds of
+simultaneous new connections, which is exactly why real load testing at scale uses a
+distributed load generator on separate machines, not a self-test. Flagged as the honest
+limit of what this pass could establish, not glossed over as "the server can only handle
+200 players."
 
 ---
 

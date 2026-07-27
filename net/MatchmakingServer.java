@@ -75,8 +75,14 @@ public class MatchmakingServer {
         this.roomRegistry = new RoomRegistry(userDatabase, log, sessionFactory, redis, gameAllocator);
     }
 
+    // Found empirically, not assumed: a load test connecting 200 simulated players in a
+    // tight burst dropped ~15 of them with Java's default accept backlog (~50). Explicit
+    // backlog of 1024 fixed it - see Server_Design.md's load-test results for numbers
+    // before and after.
+    private static final int ACCEPT_BACKLOG = 1024;
+
     public void start() throws IOException {
-        ServerSocket serverSocket = new ServerSocket(port);
+        ServerSocket serverSocket = new ServerSocket(port, ACCEPT_BACKLOG);
         running = true;
         log.log("MatchmakingServer listening on port " + port);
 

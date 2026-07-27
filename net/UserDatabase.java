@@ -91,6 +91,45 @@ public class UserDatabase implements AutoCloseable {
         }
     }
 
+    // Backs the REST /history endpoint (HealthServer) - the diagram's "REST/HTTP for
+    // ... history" requirement. Most recent first, capped so one very active player
+    // can't turn this into an unbounded query.
+    public synchronized java.util.List<GameRecord> listGames(String username, int limit) throws SQLException {
+        java.util.List<GameRecord> results = new java.util.ArrayList<>();
+        try (PreparedStatement select = connection.prepareStatement(
+                "SELECT white_username, black_username, winner_color, ended_at FROM games " +
+                        "WHERE white_username = ? OR black_username = ? " +
+                        "ORDER BY ended_at DESC LIMIT ?")) {
+            select.setString(1, username);
+            select.setString(2, username);
+            select.setInt(3, limit);
+            try (ResultSet rs = select.executeQuery()) {
+                while (rs.next()) {
+                    results.add(new GameRecord(
+                            rs.getString("white_username"),
+                            rs.getString("black_username"),
+                            rs.getString("winner_color"),
+                            rs.getLong("ended_at")));
+                }
+            }
+        }
+        return results;
+    }
+
+    public static final class GameRecord {
+        public final String whiteUsername;
+        public final String blackUsername;
+        public final String winnerColor;
+        public final long endedAt;
+
+        GameRecord(String whiteUsername, String blackUsername, String winnerColor, long endedAt) {
+            this.whiteUsername = whiteUsername;
+            this.blackUsername = blackUsername;
+            this.winnerColor = winnerColor;
+            this.endedAt = endedAt;
+        }
+    }
+
     public enum LoginResult { CREATED, OK, WRONG_PASSWORD }
 
     public synchronized LoginResult login(String username, String password) throws SQLException {

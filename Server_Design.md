@@ -70,6 +70,36 @@ just needs to keep holding across the Gateway/Matchmaker/Allocator split too —
 those three ever touch board state, they only route connections and messages to the one
 Game Server shard that owns a given match.
 
+**A real gap the reference diagram exposed, checked against the actual code:** the WS
+Gateway box is labeled "Async I/O, no thread per client" — today's code is the opposite.
+`MatchmakingServer.acceptLoop()` spawns a brand-new `Thread` per incoming connection
+(`"login-lobby"` worker), and `Match` spawns another dedicated reader `Thread` per player
+once a game starts. That's fine at a handful of connections, but it doesn't survive
+anywhere near 10M concurrent: a JVM thread reserves roughly 0.5-1MB of stack by default,
+so 10M threads alone would demand terabytes of memory before counting anything else, and
+OS-level context-switching between that many threads would dominate the CPU. The fix at
+scale is exactly what the diagram says — an async/event-loop I/O model (Java NIO/
+`Selector`, or a framework built on it) where one small pool of threads services many
+thousands of idle-most-of-the-time WebSocket connections instead of one thread per
+connection. **Not implemented today** — flagged here because it's a concrete, checkable
+claim (see the `Thread` constructions in `net/MatchmakingServer.java` and `net/Match.java`),
+not a vague scaling platitude.
+
+**Two smaller things the diagram named that this doc hadn't, worth stating explicitly:**
+- **Agones** (the diagram's dashed, "optional" box on Game Server Shards) is a
+  Kubernetes-native game-server fleet manager — it understands *match lifecycle*
+  (allocate a shard, mark it Ready/Allocated, drain it) in a way generic K8s
+  `Deployment`s don't. It's optional exactly because it's an upgrade *on top of* the
+  Kubernetes/K3s plan already described above, not a replacement for it — worth adopting
+  once the plain K8s version is working, not before.
+- **Multi-region.** Everything above (Q1-Q4, the six components) describes **one**
+  region's cluster. The diagram's own note - "for very large scale, this architecture is
+  repeated across multiple regions" - matters concretely for this game specifically:
+  latency. A 60Hz-tick, sub-second-reaction game needs both players routed to a
+  game-hosting shard physically close to *both* of them; the Matchmaker/Game Allocator
+  pair, once built, would need to prefer pairing players from the same region and
+  allocating a shard in that region, rather than optimizing purely on ELO.
+
 ---
 
 ## Q1 — 100M registered users: is SQLite the right DB?

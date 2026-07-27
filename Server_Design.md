@@ -20,6 +20,58 @@ concurrent" unchanged. Below is where each assumption breaks, and what replaces 
 
 ---
 
+## Update (day 2) — mapping onto the course's proposed architecture
+
+The course staff shared their own reference design a day after this doc was first written.
+Good news: the analysis below (written independently, from just the four scaling
+questions) already lands on almost the same shape. Their proposal names six components;
+here's how those map onto what's below, and what's genuinely new:
+
+| Course's component | Maps to (this doc) | Status |
+|---|---|---|
+| **API Gateway** (login, rooms, history — non-realtime) | "Auth service" in Q2 | Already designed |
+| **WebSocket Gateway** (live connections, state updates) | "Gateway/router" role in Q4's four-roles list | Already designed |
+| **Matchmaker** (pairs players) | "Matchmaking/Room service" in Q2 | Already designed |
+| **Game Allocator** (picks *which* Game Server shard runs a room) | Folded into "Matchmaking/Room service" in Q2 | The course splits this out as its own step — worth doing: picking *which* game-hosting instance is a distinct decision (load-based placement) from *pairing* two players, even if one service does both today in this doc |
+| **Game Server Shards** (run the actual games, authoritative) | "Game-hosting service" in Q2/Q4 | Already designed — and already true in the current code: `GameSession` is the only thing that mutates board state; neither `NetworkGameWindow` (client) nor the WebSocket layer ever apply a move themselves, they only forward intent and render whatever the server/GameSession decided |
+| **Observability** (logs, metrics, health checks, load tests) | Not previously covered | **New.** See below. |
+
+**Technology choices**, cross-checked against the course's recommendation:
+
+- **PostgreSQL** for persistent data (users, games, results, move history) — matches Q1's
+  conclusion exactly.
+- **Redis** for ephemeral state (sessions, active rooms, reconnect, matchmaking queue) —
+  matches Q2's conclusion exactly.
+- **NATS / Redis Pub/Sub** for *inter-service* messaging (e.g. Game Allocator telling a
+  Game Server shard "you now own room X", or a shard announcing "match Y ended" back to
+  the Matchmaker/Observability) — this is a layer this doc hadn't separated out: Q2's
+  Redis was scoped to *shared state* (the queue, the room→instance map), not to
+  service-to-service *events*. Worth keeping those two Redis roles conceptually distinct
+  even if the same Redis cluster ends up hosting both in a small deployment — one is a
+  data store, the other is a message bus.
+- **Docker Compose** for a small local multi-container stack, **Kubernetes/K3s** for real
+  scale — matches the "Docker / Kubernetes / K3s notes" section below exactly.
+
+**Observability — what's there today and what's missing.** `ActivityLog` already gives
+every server and client a timestamped, append-only log — a real (if primitive) starting
+point. What's genuinely absent and would need to be added for the course's fifth
+component: structured **metrics** (requests/sec, active matches, matchmaking queue depth,
+p50/p95 move-latency), **health-check endpoints** (so a load balancer or Kubernetes
+`readinessProbe`/`livenessProbe` can tell a healthy instance from a stuck one — see Q4),
+and actual **load tests** (nothing today simulates 10M concurrent players; that has to be
+built, not inferred). This is flagged as unbuilt, not glossed over.
+
+**On authority, explicitly:** the course's note that "the client doesn't decide game
+rules, and neither does the Gateway" is already how this codebase is structured, not a
+change to make. `GameSnapshotCodec`/`GameEventCodec` only ever serialize what
+`GameSession` already decided; a client click becomes a `sendClick`/`sendJump` *request*
+that the server-side `GameSession` validates and may reject. At scale, the same rule
+just needs to keep holding across the Gateway/Matchmaker/Allocator split too — none of
+those three ever touch board state, they only route connections and messages to the one
+Game Server shard that owns a given match.
+
+---
+
 ## Q1 — 100M registered users: is SQLite the right DB?
 
 **No.** Not because of row count (100M rows is not large for a real DBMS) but because of
@@ -218,3 +270,38 @@ The core game engine (`GameSession`, the validators, `ArrivalResolver`,
 `CollisionResolver`, the bus) doesn't need to change at all — it's already a clean,
 single-match unit of compute. The scaling work is entirely about *how many of those units
 run, where, and how clients find the right one* — which is exactly what Q1-Q4 are asking.
+
+---
+
+## What we shipped today: a small, working Docker Compose setup
+
+Per the instructions — "prefer something small that works over trying to build
+everything and having it not work" — today's deliverable is deliberately *not* a rewrite
+into the six-component design above. It's the current, already-working monolithic server
+(`ServerMain` → `MatchmakingServer`), containerized and proven to actually run and accept
+connections through Docker:
+
+- **`Dockerfile`** — compiles the existing source tree exactly the way `compile.bat`
+  already does (one `javac` pass, `lib/*.jar` on the classpath), then runs
+  `ServerMain 5000 /data/users.db`. No code changes; behavior is identical to running it
+  natively.
+- **`docker-compose.yml`** — builds that image, publishes port 5000, and mounts a named
+  volume at `/data` so `users.db` (accounts + ELO) survives container restarts instead of
+  resetting every time.
+- **`.dockerignore`** — keeps `upload/`, `out/`, logs, and the native `users.db` out of
+  the build context, so the container always compiles fresh instead of reusing stale
+  local build artifacts.
+
+Verified today, not just written: `docker compose build` compiles cleanly, the container
+boots and logs `MatchmakingServer listening on port 5000`, and a raw TCP connection from
+the host through the published port succeeds.
+
+**To run it:** `docker compose up --build` from the project root, then connect a client
+(`3-Play-Online.bat`) to `localhost:5000` exactly as with the native server.
+
+**Deliberately not done today** (next step, not an oversight): splitting this one
+container into the four-to-six services from the table above, and standing up Postgres +
+Redis alongside it. That's a real rewrite — new inter-service protocol, a Postgres schema
+migrated off `UserDatabase`'s SQLite calls, a Redis-backed matchmaking queue replacing the
+in-memory `List` — and doing it without breaking the one thing that currently works isn't
+a same-day change. It's the natural next milestone once this base image is trusted.

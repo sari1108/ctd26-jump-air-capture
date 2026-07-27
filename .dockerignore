@@ -1,0 +1,11 @@
+out/
+upload/
+.git/
+.claude/
+assets/
+*.log
+users.db
+*.class
+*.bat
+*.html
+*.md

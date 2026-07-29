@@ -10,10 +10,9 @@ if not exist out (
     pause
     exit /b 1
 )
-echo Connecting to the server...
-echo   - Server host: press Enter for "localhost" if the server is on this PC
-echo   - Server port: press Enter for the default (5000)
-echo   - Username / Password: pick anything - first login creates the account
+echo A login window will open. Leave Server host/port as the defaults if the
+echo server is on this PC. Username / Password: pick anything - first login
+echo creates the account.
 echo.
 java -cp "out;lib\slf4j-api.jar;lib\slf4j-nop.jar;lib\sqlite-jdbc.jar" NetworkClientDemo
 pause

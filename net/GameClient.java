@@ -7,7 +7,7 @@ import java.net.Socket;
 // every incoming message to the listener and forwarding PLAY/CLICK/JUMP/
 // DESELECT commands the other way.
 public class GameClient implements AutoCloseable {
-    private final WebSocketConnection connection;
+    private volatile WebSocketConnection connection;
     private final ActivityLog log;
     private final int elo;
     private volatile boolean running = true;
@@ -85,7 +85,21 @@ public class GameClient implements AutoCloseable {
             listener.onSearching();
         } else if (message.startsWith("MATCH_FOUND")) {
             String[] parts = message.split("\\s+");
-            listener.onMatchFound(parts[1], parts[2], Integer.parseInt(parts[3]));
+            String color = parts[1];
+            String opponent = parts[2];
+            int opponentElo = Integer.parseInt(parts[3]);
+            // A real process-level split (see MatchmakingServer/GameAllocator/
+            // GameHostServer): 3 extra fields mean this match runs on a *different*
+            // process, and the redirect must happen before the listener is told
+            // anything - onMatchFound implies "the board is about to work."
+            if (parts.length >= 7) {
+                if (!reconnectTo(parts[4], Integer.parseInt(parts[5]), parts[6])) {
+                    log.log("Redirect to " + parts[4] + ":" + parts[5] + " failed - dropping this match.");
+                    listener.onRedirectFailed(parts[4] + ":" + parts[5]);
+                    return;
+                }
+            }
+            listener.onMatchFound(color, opponent, opponentElo);
         } else if (message.equals("NO_MATCH")) {
             listener.onNoMatch();
         } else if (message.startsWith("OPPONENT_DISCONNECTED")) {
@@ -103,6 +117,35 @@ public class GameClient implements AutoCloseable {
         } else if (message.startsWith("SPECTATE_JOINED ")) {
             String[] parts = message.split("\\s+");
             listener.onSpectateJoined(parts[1], parts[2], parts[3]);
+        }
+    }
+
+    // Swaps this client onto a brand new connection to a different Game Server Shard,
+    // authenticating with a one-time resume token instead of username/password - that
+    // shard already knows who this token belongs to (GameAllocator told it via Redis
+    // pub/sub before the client was ever redirected here). Runs synchronously on the
+    // reader thread (called from dispatch()), so by the time this returns, the next
+    // readLoop() iteration is already reading from the new connection.
+    private boolean reconnectTo(String host, int port, String token) {
+        WebSocketConnection old = connection;
+        try {
+            Socket socket = new Socket(host, port);
+            socket.setTcpNoDelay(true);
+            WebSocketConnection redirected = WebSocketHandshake.clientHandshake(socket, host, port, "/");
+            redirected.sendText("RESUME " + token);
+            String reply = redirected.receiveText();
+            if (reply == null || !reply.startsWith("RESUME_OK")) {
+                log.log("Resume failed at " + host + ":" + port + ": " + reply);
+                redirected.close();
+                return false;
+            }
+            connection = redirected;
+            old.close();
+            log.log("Redirected to game host " + host + ":" + port);
+            return true;
+        } catch (IOException e) {
+            log.log("Failed to connect to game host " + host + ":" + port + ": " + e.getMessage());
+            return false;
         }
     }
 

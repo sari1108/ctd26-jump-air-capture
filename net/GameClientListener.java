@@ -7,6 +7,9 @@ public interface GameClientListener {
     default void onStatus(String status) {}
     default void onSearching() {}
     default void onMatchFound(String color, String opponentUsername, int opponentElo) {}
+    // Only fires under a real process-level split (see GameAllocator's remote mode):
+    // the Gateway handed off to a Game Server Shard, but reconnecting to it failed.
+    default void onRedirectFailed(String hostPort) {}
     default void onNoMatch() {}
     default void onOpponentDisconnected(int secondsRemaining) {}
     default void onMoveResolved(MoveEvent event) {}

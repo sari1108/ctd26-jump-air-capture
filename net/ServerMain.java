@@ -38,8 +38,20 @@ public class ServerMain {
             log.log("Connected to Redis at " + redisUrl + " - matchmaking queue and room registry are Redis-backed.");
         }
 
+        // GAME_HOST_INSTANCES ("host1:port1,host2:port2,..."), when set, opts this
+        // Gateway into the real process-level split: the ELO queue hands matches off to
+        // one of these separate GameHostMain instances instead of running them here -
+        // see GameAllocator/GameHostServer. Unset (the default), every match still runs
+        // in this same process, exactly as before.
+        java.util.List<String> gameHostInstances = java.util.Collections.emptyList();
+        String gameHostInstancesEnv = System.getenv("GAME_HOST_INSTANCES");
+        if (gameHostInstancesEnv != null && !gameHostInstancesEnv.isBlank()) {
+            gameHostInstances = java.util.Arrays.asList(gameHostInstancesEnv.split(","));
+            log.log("Process-level split active - ELO matches hand off to: " + gameHostInstances);
+        }
+
         MatchmakingServer server = new MatchmakingServer(port, userDatabase, log,
-                () -> new GameSession(new BoardParser().parse(STARTING_POSITION)), redis);
+                () -> new GameSession(new BoardParser().parse(STARTING_POSITION)), redis, gameHostInstances);
         server.start();
 
         HealthServer health = new HealthServer(8080, server, userDatabase);

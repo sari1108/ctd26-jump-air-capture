@@ -72,6 +72,34 @@ final class RedisClient implements AutoCloseable {
         command("PING");
     }
 
+    // Pub/sub: the inter-service messaging layer the course diagram calls for (NATS or
+    // Redis Pub/Sub) - a Gateway process telling a specific Game-hosting instance "you
+    // now own this match" (see GameAllocator's remote mode / GameHostServer). Real,
+    // separate from the hset/sadd data-mirroring commands above (those are a shared
+    // *store*; this is a message *bus* - Server_Design.md draws the same distinction).
+    synchronized void publish(String channel, String message) throws IOException {
+        command("PUBLISH", channel, message);
+    }
+
+    // Blocks forever, delivering each message published to `channel` to onMessage - call
+    // this from its own dedicated thread on its own dedicated RedisClient instance (once
+    // subscribed, a connection stops accepting ordinary commands, so it can't be shared
+    // with the hset/sadd calls above).
+    void subscribeLoop(String channel, java.util.function.Consumer<String> onMessage) throws IOException {
+        synchronized (this) {
+            command("SUBSCRIBE", channel); // returns the ["subscribe", channel, count] ack
+        }
+        while (true) {
+            Object reply = readReply();
+            if (reply instanceof List) {
+                List<?> arr = (List<?>) reply;
+                if (arr.size() >= 3 && "message".equals(arr.get(0))) {
+                    onMessage.accept(String.valueOf(arr.get(2)));
+                }
+            }
+        }
+    }
+
     private Object command(String... args) throws IOException {
         StringBuilder req = new StringBuilder();
         req.append('*').append(args.length).append("\r\n");

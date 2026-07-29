@@ -1,0 +1,37 @@
+# Opt-in overlay that activates the real process-level split (Server_Design.md Q2):
+# adds a second, separate Game Server Shard process and points the Gateway's ELO
+# matchmaking queue at it instead of hosting matches itself.
+#
+# Usage:  docker compose -f docker-compose.yml -f docker-compose.split.yml up --build
+#
+# The plain `docker compose up --build` (docker-compose.yml alone) is completely
+# unaffected by this file's existence - same single-process behavior as always. This
+# is a separate file, not a change to docker-compose.yml, on purpose: the split is a
+# real architectural change (GameAllocator's remote mode, GameHostServer, a new wire
+# message for the client redirect) and staying opt-in means the tested default never
+# has to change to prove the split works too.
+services:
+  game-host-1:
+    build: .
+    ports:
+      - "5100:5100"
+    environment:
+      DB_URL: jdbc:postgresql://postgres:5432/chessgame?user=chessgame&password=chessgame
+      REDIS_URL: redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    # selfAddress ("localhost:5100") is what the Gateway tells clients to reconnect
+    # to - it has to be reachable *from the client*, not just from other containers,
+    # so it's the host-published address, not the in-network container hostname.
+    entrypoint: ["/bin/sh", "-c", "java -cp \"out:lib/slf4j-api.jar:lib/slf4j-nop.jar:lib/sqlite-jdbc.jar:lib/postgresql.jar\" GameHostMain 5100 \"$$DB_URL\" \"localhost:5100\""]
+
+  game-server:
+    environment:
+      GAME_HOST_INSTANCES: localhost:5100
+    depends_on:
+      game-host-1:
+        condition: service_started

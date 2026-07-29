@@ -301,7 +301,7 @@ Short-lived matches change the shape of the game-hosting fleet specifically:
 | `MatchmakingServer.queue` (local `List`) | ✅ **Done** — mirrored into Redis (`net/RedisClient.java`, hand-rolled RESP client) when `REDIS_URL` is set; the *matching decision* still runs inside this one process — real cross-instance matchmaking still needs the service split below |
 | `RoomRegistry.rooms` (local `ConcurrentHashMap`) | ✅ **Done** (same caveat) — room existence/state mirrored into Redis; `roomId -> instance` routing still needs multiple game-hosting instances to exist first |
 | No observability beyond raw logs | ✅ **Done** — `/healthz` + `/metrics` (`net/HealthServer.java`, JDK's built-in `HttpServer`, no new dependency); no alerts/traces/load-tests yet |
-| One process = auth + matchmaking + game hosting | Still one process — four separate services/images is the one item on this whole table genuinely not started |
+| One process = auth + matchmaking + game hosting | ✅ **Real, for the ELO queue path** — `GameHostServer`/`GameHostMain` is a genuinely separate process; `GameAllocator`'s remote mode hands off via Redis pub/sub, `GameClient` transparently reconnects. Opt-in (`GAME_HOST_INSTANCES` / `docker-compose.split.yml`), default single-process behavior unchanged. Room/spectator path still always local — see the split section below for the honest scope line |
 | `Match.tickLoop()` broadcasts full `GAMESTATE` @ 60Hz | Event-driven (`MOVE`/`GAMEOVER`/`GAMESTARTED`) as primary channel; full snapshot only as an infrequent resync keyframe |
 | Client reconnects to the same single server | Matchmaking hands the client a *specific* game-hosting instance address to connect to directly |
 | No graceful shutdown story | ⚠️ **Partially done** — `k8s/04-game-server.yaml` wires `readinessProbe`/`preStop`/`terminationGracePeriodSeconds`, but `ServerMain` itself doesn't yet listen for a drain signal to stop accepting new matches; the K8s-side primitives are ready, the app-side hook isn't written |
@@ -533,12 +533,79 @@ exactly the reported symptom.
 
 ---
 
+## The real process-level split — built, and a real deadlock it exposed
+
+The service split was the one item repeatedly flagged above as "too big to attempt
+alongside everything else." It got built anyway, as a fully opt-in mode that changes
+nothing about the default single-process path unless explicitly turned on — see below
+for exactly how that safety was maintained.
+
+**The pieces:**
+- **`net/GameHostServer.java` / `GameHostMain.java`** — a real, separate process: a
+  Game Server Shard that only *hosts already-allocated matches*. It never accepts LOGIN
+  and never runs matchmaking. It subscribes to its own Redis pub/sub channel
+  (`gamehost:<its own address>`) and waits.
+- **`GameAllocator`'s remote mode** — when constructed with a non-empty list of
+  `host:port` remote instances (via `GAME_HOST_INSTANCES`), `allocateForMatchmaking()`
+  no longer starts a `Match` locally. It picks an instance, mints two one-time resume
+  tokens, and `PUBLISH`es an `ALLOCATE` message to that instance's channel — this is the
+  actual NATS/Redis-Pub/Sub inter-service messaging the diagram calls for, not the
+  hset/sadd *data*-mirroring built earlier (Server_Design.md already draws that
+  distinction; this is the message-bus half of it, now real).
+- **The wire-protocol change** — `MATCH_FOUND` grows three optional trailing fields
+  (host, port, token) when the match was allocated remotely. `GameClient` handles this
+  **transparently**: on seeing those fields, it closes its connection to the Gateway,
+  opens a new one to the named Game Server Shard, sends `RESUME <token>` instead of
+  `LOGIN`, and only *then* tells its listener `onMatchFound` fired. `NetworkGameWindow`/
+  `NetworkClientDemo` needed zero changes — the reconnect is fully encapsulated inside
+  `GameClient`.
+- **Default behavior is provably unchanged.** `GAME_HOST_INSTANCES` unset (every
+  existing constructor, `docker-compose.yml` as before) means `GameAllocator` behaves
+  exactly as it did before this section existed. The split lives in a *separate*
+  `docker-compose.split.yml` overlay
+  (`docker compose -f docker-compose.yml -f docker-compose.split.yml up --build`) —
+  the plain `docker compose up --build` command already documented above is untouched.
+
+**Honest scope limits, not silently dropped:** remote allocation only wires into
+`MatchmakingServer`'s ELO queue. `RoomRegistry` (Create/Join/spectate) **always**
+allocates locally — a spectator would need to find the same shard a room's match is
+running on, which needs a lookup this pass doesn't build. Rooms staying local, honestly,
+was the deliberate way to ship the real thing for the primary Play flow without
+half-building the room/spectator path too.
+
+**A real bug this exposed, not a synthetic one.** The first end-to-end test hung: a
+disconnect's 20-second grace period never resolved, no ELO update, no crash, nothing in
+`stderr`. `jstack`'d the live process rather than guessing: `match-read-BLACK` was
+`BLOCKED`, holding the `RedisClient` monitor while stuck inside `hset()`'s socket read;
+`match-read-WHITE` was blocked waiting on that same monitor; `gamehost-subscribe` was
+blocked trying to read the same underlying `BufferedInputStream`. Root cause: the *same*
+`RedisClient` connection was being used both for `GameHostServer`'s own pub/sub
+`subscribeLoop` (which owns that connection's input stream forever once subscribed) and
+for `Match`'s session-mirroring `hset`/`del` calls — a real, direct violation of the
+Redis protocol rule that a subscribed connection can't also serve ordinary commands.
+Fixed by giving `GameHostServer` two separate connections (one dedicated to
+`subscribeLoop`, one for ordinary commands) instead of sharing one. Re-verified with the
+identical test afterward: the disconnect resolved at exactly +20s, correct ELO update on
+both sides, correct `winner` recorded in the shared `games` table — read back directly
+from SQLite to confirm, not inferred from logs alone.
+
+**Verified, end to end, twice** — once with two bare `java` processes on this machine,
+once through the real `docker-compose.split.yml` stack (`postgres`+`redis`+`game-server`
++`game-host-1`, all four containers, built and started for real): in both runs, the same
+network smoke test (`LOGIN`/`PLAY`/`CREATE_ROOM`/`JOIN_ROOM`) passed — the ELO queue's
+match visibly redirected to the separate Game Server Shard (`"Redirected to game host
+..."` in the client's own log) while Room-based matches stayed local, exactly as
+designed. The default (no `GAME_HOST_INSTANCES`) native path was re-run through the same
+smoke test immediately after, with identical results — the split changed nothing about
+it.
+
+---
+
 ## What's still genuinely not done, and why — checked concretely, not estimated
 
-Two items from the course's diagram remain unimplemented on purpose: the WS Gateway's
-"async I/O, no thread per client," and a true process-level split into separate
-Auth/Matchmaking/Game-hosting services. Both were re-examined specifically to answer
-"why not just do it now" with facts instead of general caution:
+One item from the course's diagram remains unimplemented on purpose: the WS Gateway's
+"async I/O, no thread per client." Re-examined specifically to answer "why not just do
+it now" with facts instead of general caution:
 
 **Async I/O is not a socket-layer swap — it's a rewrite of every blocking wait in the
 server.** Grepping the codebase for `receiveText()` (the blocking "wait for the next
@@ -551,18 +618,14 @@ What *would* need to change is every one of those seven sequential, easy-to-read
 waits, rewritten as callback/continuation-driven state instead — the entire control flow
 of `MatchmakingServer`, `RoomRegistry`, and `Match`, not an isolated layer underneath
 them. That's real open-heart surgery on the one thing that's tested and working with real
-players; it's still the right call to leave it for a dedicated pass with real time to
-verify each of those seven sites individually, not squeezed in alongside everything else
-here.
+players.
 
-**A true process-level service split needs a client-visible protocol change, not just a
-server-side one.** Today `MATCH_FOUND` carries no address, because the client is already
-talking to the one process running the match. A real split means the Matchmaking/Game
-Allocator process telling the client *which game-hosting instance's address* to open a
-new connection to — a wire-protocol addition on both `GameClient` and the server side,
-not a server-internal refactor. `GameAllocator` (just added, see the table above) is the
-safe, real first step toward this: the *seam* now exists in code, cleanly separated from
-matchmaking and from room management, with a single method that would change. Finishing
-the split — actually running a second game-hosting process and teaching the client to
-connect to it — is the next milestone once there's time to test that reconnection flow
-properly, not a same-session change to the thing people are actively test-playing on.
+Worth noting explicitly, now that the split is real: async I/O is an **efficiency**
+optimization, not a hard requirement for reaching very high concurrent-player counts.
+Thread-per-connection still supports thousands of connections per instance; with the
+split now real, reaching a large number of concurrent players is mostly a matter of
+running *more* Game Server Shard instances (exactly what the `HorizontalPodAutoscaler`
+in `k8s/04-game-server.yaml` is for) rather than making each instance handle more
+connections. Async I/O would lower the cost per instance at very large scale, but it is
+no longer the thing standing between this codebase and a real multi-instance deployment
+— the split is.

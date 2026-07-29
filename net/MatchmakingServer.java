@@ -66,12 +66,22 @@ public class MatchmakingServer {
 
     public MatchmakingServer(int port, UserDatabase userDatabase, ActivityLog log,
                               Supplier<GameSession> sessionFactory, RedisClient redis) {
+        this(port, userDatabase, log, sessionFactory, redis, java.util.Collections.emptyList());
+    }
+
+    // remoteInstances: "host:port" strings of running GameHostServer instances. Empty
+    // (the two constructors above) means today's exact behavior - every match runs
+    // locally, in this process. Non-empty opts into the real process-level split -
+    // see GameAllocator.
+    public MatchmakingServer(int port, UserDatabase userDatabase, ActivityLog log,
+                              Supplier<GameSession> sessionFactory, RedisClient redis,
+                              java.util.List<String> remoteInstances) {
         this.port = port;
         this.userDatabase = userDatabase;
         this.log = log;
         this.sessionFactory = sessionFactory;
         this.redis = redis;
-        this.gameAllocator = new GameAllocator(userDatabase, log, redis);
+        this.gameAllocator = new GameAllocator(userDatabase, log, redis, remoteInstances);
         this.roomRegistry = new RoomRegistry(userDatabase, log, sessionFactory, redis, gameAllocator);
     }
 
@@ -341,16 +351,26 @@ public class MatchmakingServer {
     }
 
     private void startMatch(QueueEntry a, QueueEntry b) {
-        Match.Seat white = new Match.Seat(a.connection, a.username, "WHITE");
-        Match.Seat black = new Match.Seat(b.connection, b.username, "BLACK");
-
-        sendSafely(a.connection, "MATCH_FOUND WHITE " + b.username + " " + b.elo);
-        sendSafely(b.connection, "MATCH_FOUND BLACK " + a.username + " " + a.elo);
-
-        gameAllocator.allocate(sessionFactory, white, black);
+        GameAllocator.AllocationResult result = gameAllocator.allocateForMatchmaking(
+                sessionFactory, a.username, a.elo, a.connection, b.username, b.elo, b.connection);
         matchesStarted.incrementAndGet();
-        log.log("Match started: " + a.username + " (white, elo " + a.elo + ") vs "
-                + b.username + " (black, elo " + b.elo + ")");
+
+        if (result.isRemote()) {
+            // The client reconnects to a *different* process entirely - see GameClient's
+            // transparent handling of the extra fields. This connection's job ends here;
+            // nothing reads from it again (the client closes it once it has redirected).
+            sendSafely(a.connection, "MATCH_FOUND WHITE " + b.username + " " + b.elo
+                    + " " + result.remoteHost + " " + result.remotePort + " " + result.whiteToken);
+            sendSafely(b.connection, "MATCH_FOUND BLACK " + a.username + " " + a.elo
+                    + " " + result.remoteHost + " " + result.remotePort + " " + result.blackToken);
+            log.log("Match handed off to " + result.remoteHost + ":" + result.remotePort + ": "
+                    + a.username + " (white) vs " + b.username + " (black)");
+        } else {
+            sendSafely(a.connection, "MATCH_FOUND WHITE " + b.username + " " + b.elo);
+            sendSafely(b.connection, "MATCH_FOUND BLACK " + a.username + " " + a.elo);
+            log.log("Match started: " + a.username + " (white, elo " + a.elo + ") vs "
+                    + b.username + " (black, elo " + b.elo + ")");
+        }
 
         a.resolved.countDown();
         b.resolved.countDown();

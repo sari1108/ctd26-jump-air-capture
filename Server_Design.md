@@ -41,7 +41,16 @@ here's how those map onto what's below, and what's genuinely new:
 - **PostgreSQL** for persistent data (users, games, results, move history) — matches Q1's
   conclusion exactly.
 - **Redis** for ephemeral state (sessions, active rooms, reconnect, matchmaking queue) —
-  matches Q2's conclusion exactly.
+  matches Q2's conclusion exactly. **All four now real**: matchmaking queue and active
+  rooms since the first Redis pass; sessions/reconnect added in `Match.java` — a
+  disconnected player's grace-period countdown (`session:<matchId>`, disconnected
+  username + seconds remaining) is mirrored live into Redis the same way, verified by
+  polling Redis mid-countdown and watching the key appear, tick down, then get cleared
+  when the grace period resolves. One honest distinction, not glossed over: this mirrors
+  disconnect/grace-period *visibility* into Redis, it does not add actual
+  reconnect-to-the-same-match *capability* — resuming a live Seat with a brand new
+  `WebSocketConnection` would be a real change to the connection-handling model, the same
+  category of risk as async I/O, and is left undone for the same reason.
 - **NATS / Redis Pub/Sub** for *inter-service* messaging (e.g. Game Allocator telling a
   Game Server shard "you now own room X", or a shard announcing "match Y ended" back to
   the Matchmaker/Observability) — this is a layer this doc hadn't separated out: Q2's

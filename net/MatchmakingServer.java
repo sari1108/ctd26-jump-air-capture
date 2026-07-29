@@ -71,7 +71,7 @@ public class MatchmakingServer {
         this.log = log;
         this.sessionFactory = sessionFactory;
         this.redis = redis;
-        this.gameAllocator = new GameAllocator(userDatabase, log);
+        this.gameAllocator = new GameAllocator(userDatabase, log, redis);
         this.roomRegistry = new RoomRegistry(userDatabase, log, sessionFactory, redis, gameAllocator);
     }
 

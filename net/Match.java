@@ -1,6 +1,7 @@
 import java.io.IOException;
 import java.sql.SQLException;
 import java.util.List;
+import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 
 // One active game between two already-matched, already-seated players. Owns
@@ -13,21 +14,37 @@ public class Match {
     private static final long TICK_MS = 16;
     private static final long DISCONNECT_GRACE_MS = 20_000;
 
+    private final String matchId = UUID.randomUUID().toString();
     private final GameSession session;
     private final UserDatabase userDatabase;
     private final ActivityLog log;
     private final Seat white;
     private final Seat black;
+    private final RedisClient redis;
     private final List<WebSocketConnection> spectators = new CopyOnWriteArrayList<>();
     private final Object lock = new Object();
     private volatile boolean running = true;
 
     public Match(GameSession session, UserDatabase userDatabase, ActivityLog log, Seat white, Seat black) {
+        this(session, userDatabase, log, white, black, null);
+    }
+
+    // redis is nullable - unset (native/local runs), disconnect/grace-period state stays
+    // purely local, exactly as before. Set (docker-compose.yml's REDIS_URL), that state
+    // is additionally mirrored into Redis under "session:<matchId>" - real answer to the
+    // diagram's "Redis stores ... sessions, reconnect" - inspectable shared state, same
+    // pattern as the matchmaking queue and room registry. This mirrors *visibility* into
+    // the disconnect/grace countdown; it does not add actual reconnect-to-the-same-match
+    // capability, which would mean re-attaching a new WebSocketConnection to an existing
+    // Seat - a real behavior change to the connection model, deliberately not attempted
+    // here for the same reason async I/O isn't (see Server_Design.md).
+    public Match(GameSession session, UserDatabase userDatabase, ActivityLog log, Seat white, Seat black, RedisClient redis) {
         this.session = session;
         this.userDatabase = userDatabase;
         this.log = log;
         this.white = white;
         this.black = black;
+        this.redis = redis;
     }
 
     public void start() {
@@ -103,6 +120,7 @@ public class Match {
         self.connected = false;
         log.log(self.username + " disconnected mid-game; " + opponent.username + " wins in "
                 + (DISCONNECT_GRACE_MS / 1000) + "s unless they return.");
+        mirrorSessionToRedis(self.username, DISCONNECT_GRACE_MS / 1000);
 
         Thread grace = new Thread(() -> {
             for (long remaining = DISCONNECT_GRACE_MS; remaining > 0; remaining -= 1000) {
@@ -111,6 +129,7 @@ public class Match {
                 for (WebSocketConnection spec : spectators) {
                     sendSafely(spec, "OPPONENT_DISCONNECTED " + (remaining / 1000));
                 }
+                mirrorSessionToRedis(self.username, remaining / 1000);
                 try {
                     Thread.sleep(1000);
                 } catch (InterruptedException e) {
@@ -123,9 +142,30 @@ public class Match {
                     session.forceGameOver(opponent.color);
                 }
             }
+            clearSessionFromRedis();
         }, "match-disconnect-grace");
         grace.setDaemon(true);
         grace.start();
+    }
+
+    private void mirrorSessionToRedis(String disconnectedUsername, long secondsRemaining) {
+        if (redis == null) return;
+        try {
+            String key = "session:" + matchId;
+            redis.hset(key, "disconnectedUsername", disconnectedUsername);
+            redis.hset(key, "secondsRemaining", String.valueOf(secondsRemaining));
+        } catch (IOException e) {
+            log.log("Redis error mirroring session " + matchId + ": " + e.getMessage());
+        }
+    }
+
+    private void clearSessionFromRedis() {
+        if (redis == null) return;
+        try {
+            redis.del("session:" + matchId);
+        } catch (IOException e) {
+            log.log("Redis error clearing session " + matchId + ": " + e.getMessage());
+        }
     }
 
     // Standard ELO update (K=32) once this match's game actually ends, win or

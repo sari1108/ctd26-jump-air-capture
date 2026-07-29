@@ -16,14 +16,20 @@ import java.util.function.Supplier;
 final class GameAllocator {
     private final UserDatabase userDatabase;
     private final ActivityLog log;
+    private final RedisClient redis;
 
     GameAllocator(UserDatabase userDatabase, ActivityLog log) {
+        this(userDatabase, log, null);
+    }
+
+    GameAllocator(UserDatabase userDatabase, ActivityLog log, RedisClient redis) {
         this.userDatabase = userDatabase;
         this.log = log;
+        this.redis = redis;
     }
 
     Match allocate(Supplier<GameSession> sessionFactory, Match.Seat white, Match.Seat black) {
-        Match match = new Match(sessionFactory.get(), userDatabase, log, white, black);
+        Match match = new Match(sessionFactory.get(), userDatabase, log, white, black, redis);
         match.start();
         return match;
     }

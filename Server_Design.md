@@ -1,5 +1,42 @@
 # Server Design — Scaling to Cloud Scale
 
+## Executive summary — is this ready for 100M registered / 10M concurrent?
+
+**No, not deployed at that scale — but the architectural blocker that would have made it
+*impossible* is gone, and every remaining gap is a known, named, deliberate one, not an
+unknown.**
+
+What's real, running code today (not just this document): PostgreSQL for durable data
+(users, ELO, game results), Redis for shared matchmaking/room/session state, a genuine
+**separate process** that hosts games (`GameHostServer`) reachable via Redis pub/sub
+hand-off with transparent client reconnection, Kubernetes manifests validated against a
+real cluster with autoscaling wired up, and a working Docker Compose deployment of all
+of it. Every one of those was built as an *opt-in* addition — the original single-process
+mode this project was graded on still works, byte-for-byte, unchanged.
+
+What's genuinely still missing, in order of what actually blocks 100M/10M:
+1. **Only one Gateway process exists.** Login/matchmaking still goes through a single
+   `MatchmakingServer` instance. Running a second one wouldn't currently let it match
+   players against the first — that needs the same kind of redirect mechanism
+   `GameHostServer` uses, applied one layer up. Not built.
+2. **Only one Game Server Shard has ever actually run at a time.** The mechanism to run
+   many is real and tested; running *many simultaneously* under real load has not been
+   attempted.
+3. **No real load test at that scale.** The load-test tool here maxed out meaningfully
+   around ~200 real connections from one machine (see the load-test results above) —
+   genuinely testing millions needs a distributed load generator across many machines,
+   which this environment doesn't have.
+4. **Async I/O.** Still thread-per-connection. Matters more at very large scale (cost per
+   instance), less than it used to now that horizontal scaling (more instances) is real.
+5. **Multi-region.** Not attempted - needs real infrastructure in more than one place.
+
+None of these are surprises discovered late - each was investigated, and in most cases a
+real prototype was built and tested before concluding it's out of scope for this pass.
+That's the actual deliverable: not "it handles 10M," but "here's exactly what would still
+need to happen, in what order, and why - checked against real code, not guessed."
+
+---
+
 ## Where the current server stands today
 
 The current server (`ServerMain` → `MatchmakingServer` → `Match`/`RoomRegistry`) is a

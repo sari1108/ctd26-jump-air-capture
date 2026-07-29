@@ -99,6 +99,10 @@ public class MatchmakingServer {
         while (running) {
             try {
                 Socket socket = serverSocket.accept();
+                // See GameClient's matching setTcpNoDelay(true) - Nagle's algorithm on
+                // *either* end of the connection is enough to stall small, frequent game
+                // updates; both sides need it disabled for the game to actually feel real-time.
+                socket.setTcpNoDelay(true);
                 log.log("Connection accepted from " + socket.getRemoteSocketAddress());
                 WebSocketConnection connection = WebSocketHandshake.serverHandshake(socket);
                 Thread worker = new Thread(() -> loginThenLobby(connection), "login-lobby");

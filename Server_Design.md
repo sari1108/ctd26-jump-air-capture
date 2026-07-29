@@ -509,6 +509,30 @@ limit of what this pass could establish, not glossed over as "the server can onl
 
 ---
 
+## A real playability bug, found from actual play-testing (not a design question)
+
+A live playtest through Docker Compose reported the game as unplayably slow. Checked the
+code rather than guessed: `GameClient.java` and `MatchmakingServer.java`'s accepted
+socket both created plain `Socket`s with no `setTcpNoDelay(true)`. Nagle's algorithm
+(TCP's default) buffers small writes hoping to coalesce them with more data before
+sending — exactly the wrong behavior for a real-time game whose entire design is small,
+frequent updates (a `GAMESTATE` broadcast every 16ms). Combined with the receiving side's
+delayed-ACK behavior, this is a well-known pattern that produces ~40ms+ stalls on small
+bidirectional traffic - very noticeable in a 16ms-tick game, and worse yet through
+Docker's extra network virtualization layer (Windows host → WSL2 VM → container).
+
+Fixed with one line on each end of the connection (`socket.setTcpNoDelay(true)`, right
+after the socket is created/accepted, before the WebSocket handshake). Verified with a
+purpose-built probe (`GameClient` recording the real arrival time of each `GAMESTATE`)
+against the running Docker stack, post-fix: **171 snapshots in 3 seconds, average gap
+17.36ms (target: 16ms), max gap 31.92ms, zero gaps over 40ms** — ticks arriving smoothly,
+no stall pattern. No "before" number was captured (the fix was already deployed by the
+time the probe was built), but the post-fix numbers are objectively healthy against the
+theoretical 16ms target, and the fix itself is the textbook, well-established remedy for
+exactly the reported symptom.
+
+---
+
 ## What's still genuinely not done, and why — checked concretely, not estimated
 
 Two items from the course's diagram remain unimplemented on purpose: the WS Gateway's

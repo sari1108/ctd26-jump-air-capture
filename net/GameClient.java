@@ -16,6 +16,10 @@ public class GameClient implements AutoCloseable {
                        ActivityLog log, GameClientListener listener) throws IOException {
         this.log = log;
         Socket socket = new Socket(host, port);
+        // Nagle's algorithm buffers small writes hoping to coalesce them - exactly wrong
+        // for a real-time game sending small, frequent updates. Without this, each move/
+        // snapshot can sit queued for tens of milliseconds before actually going out.
+        socket.setTcpNoDelay(true);
         connection = WebSocketHandshake.clientHandshake(socket, host, port, "/");
         log.log("Connected to " + host + ":" + port);
 
